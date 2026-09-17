@@ -5,6 +5,21 @@ obj/
 # 本地密钥（含数据库密码），不要提交
 .env
 
+# 运行产物：日志 / 导出 / 更新包 / 上次机型，各机器自己生成，不入库。
+# 但 data/configs 下的机型配置要入库（一台机器一份档案，跟着代码走），
+# 所以这里忽略 data/ 的内容再单独放行 configs —— 注意不能直接写 "data/"，
+# 那样 git 不会走进被排除的目录，后面的 ! 放行就不生效了。
+data/*
+!data/configs/
+!data/configs/**
+
+# 运行探针：AppPaths.IsWritable 在根目录试写后删除，异常退出时可能残留
+.write-probe-*
+
+# 测试产物：dotnet test --collect / --logger trx 会生成
+TestResults/
+*.trx
+
 # IDE
 .vs/
 *.user

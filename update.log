@@ -1,3 +1,21 @@
+2026-09-17  仓库卫生：运行产物不入库，data/ 只放行机型配置
+
+【变更】
+- .gitignore 新增规则：
+  - data/*              运行产物：日志 / 导出 / 更新包 / 上次机型，各机器自己生成
+  - !data/configs/**    例外放行：机型配置 <机型>.json 跟着代码走
+  - .write-probe-*      AppPaths 在根目录试写探针后删除，异常退出可能残留
+  - TestResults/、*.trx  dotnet test --collect / --logger trx 的产物
+- 写法说明：不能直接写 "data/"，被排除的目录 git 不会进入，后面的 ! 放行会失效，
+  所以用 data/* + !data/configs/** 组合
+
+【核对结果】
+- 不入库：data/logs/plc-*.log、data/last-profile.txt、.env、各项目 bin/ 与 obj/
+- 仍入库：data/configs/<机型>.json（配置）、update.log（本日志）
+
+【推送】
+- 本地提交已推送到 origin/main（file:////rd-test/git-test/Hello_c.git）
+
 2026-09-17  重构：把地基逻辑抽离到独立类库 PlcCore
 
 【新增】
