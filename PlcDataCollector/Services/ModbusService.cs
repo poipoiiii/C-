@@ -40,6 +40,20 @@ public class ModbusService : IDisposable
         return (short)result[0];
     }
 
+    /// <summary>
+    /// 批量读取连续保持寄存器，地址为 0-based 协议地址。
+    /// 地址段非法时从站会回异常码（NModbus 抛 SlaveException），调用方自行捕获。
+    /// </summary>
+    public ushort[] ReadRegisters(ushort address, ushort count)
+    {
+        if (_master is null)
+        {
+            throw new InvalidOperationException("Modbus 尚未连接，请先调用 Connect。");
+        }
+
+        return _master.ReadHoldingRegisters(_slaveId, address, count);
+    }
+
     public void Dispose()
     {
         _master?.Dispose();

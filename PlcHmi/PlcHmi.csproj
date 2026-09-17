@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- 必须带 Windows SDK 版本号：LiveCharts2 依赖的 SkiaSharp.Views.WPF 只提供 net8.0-windows10.0.19041 资源 -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>PlcHmi</RootNamespace>
+    <AssemblyName>PlcHmi</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- UI 控件库、实时曲线、MVVM 源生成器，均为现成框架 -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="HandyControl" Version="3.5.1" />
+    <PackageReference Include="LiveChartsCore.SkiaSharpView.WPF" Version="2.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 复用采集项目里的 ModbusService / AppDbContext / DataRecord，不重复实现 -->
+    <ProjectReference Include="..\PlcDataCollector\PlcDataCollector.csproj" />
+  </ItemGroup>
+
+</Project>

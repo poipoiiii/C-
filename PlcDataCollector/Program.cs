@@ -2,8 +2,8 @@ using DotNetEnv;
 using PlcDataCollector.Data;
 using PlcDataCollector.Services;
 
-// 加载 .env 中的数据库连接配置（该文件不入库）
-Env.Load();
+// 加载仓库根目录的 .env（从当前目录向上查找），该文件不入库
+Env.TraversePath().Load();
 
 // 目标 PLC：默认走真实 PLC；本地仿真时用命令行覆盖，例如 dotnet run -- 127.0.0.1 5020
 string ip = args.Length > 0 ? args[0] : "192.168.1.10";

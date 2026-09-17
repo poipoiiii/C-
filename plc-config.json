@@ -1,0 +1,328 @@
+{
+  "Tags": [
+    {
+      "Address": 0,
+      "Name": "温度",
+      "Unit": "℃",
+      "Scale": 0.1,
+      "Offset": 0,
+      "ColumnName": "温度"
+    },
+    {
+      "Address": 1,
+      "Name": "压力",
+      "Unit": "kPa",
+      "Scale": 0.01,
+      "Offset": 0,
+      "ColumnName": "压力"
+    },
+    {
+      "Address": 2,
+      "Name": "产量",
+      "Unit": "件",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "产量"
+    },
+    {
+      "Address": 3,
+      "Name": "设定温度",
+      "Unit": "℃",
+      "Scale": 0.1,
+      "Offset": 0,
+      "ColumnName": "设定温度"
+    },
+    {
+      "Address": 4,
+      "Name": "运行状态",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "运行状态"
+    },
+    {
+      "Address": 5,
+      "Name": "点位5",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位5"
+    },
+    {
+      "Address": 6,
+      "Name": "点位6",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位6"
+    },
+    {
+      "Address": 7,
+      "Name": "点位7",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位7"
+    },
+    {
+      "Address": 8,
+      "Name": "点位8",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位8"
+    },
+    {
+      "Address": 9,
+      "Name": "点位9",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位9"
+    },
+    {
+      "Address": 10,
+      "Name": "点位10",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位10"
+    },
+    {
+      "Address": 11,
+      "Name": "点位11",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位11"
+    },
+    {
+      "Address": 12,
+      "Name": "点位12",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位12"
+    },
+    {
+      "Address": 13,
+      "Name": "点位13",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位13"
+    },
+    {
+      "Address": 14,
+      "Name": "点位14",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位14"
+    },
+    {
+      "Address": 15,
+      "Name": "点位15",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位15"
+    },
+    {
+      "Address": 16,
+      "Name": "点位16",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位16"
+    },
+    {
+      "Address": 17,
+      "Name": "点位17",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位17"
+    },
+    {
+      "Address": 18,
+      "Name": "点位18",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位18"
+    },
+    {
+      "Address": 19,
+      "Name": "点位19",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位19"
+    },
+    {
+      "Address": 20,
+      "Name": "点位20",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位20"
+    },
+    {
+      "Address": 21,
+      "Name": "点位21",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位21"
+    },
+    {
+      "Address": 22,
+      "Name": "热封数量",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "热封数量"
+    },
+    {
+      "Address": 23,
+      "Name": "点位23",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位23"
+    },
+    {
+      "Address": 24,
+      "Name": "点位24",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位24"
+    },
+    {
+      "Address": 25,
+      "Name": "点位25",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位25"
+    },
+    {
+      "Address": 26,
+      "Name": "点位26",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位26"
+    },
+    {
+      "Address": 27,
+      "Name": "点位27",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位27"
+    },
+    {
+      "Address": 28,
+      "Name": "点位28",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位28"
+    },
+    {
+      "Address": 29,
+      "Name": "点位29",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位29"
+    },
+    {
+      "Address": 30,
+      "Name": "点位30",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位30"
+    },
+    {
+      "Address": 31,
+      "Name": "点位31",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位31"
+    },
+    {
+      "Address": 32,
+      "Name": "点位32",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位32"
+    },
+    {
+      "Address": 33,
+      "Name": "点位33",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位33"
+    },
+    {
+      "Address": 34,
+      "Name": "点位34",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位34"
+    },
+    {
+      "Address": 35,
+      "Name": "点位35",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位35"
+    },
+    {
+      "Address": 36,
+      "Name": "点位36",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位36"
+    },
+    {
+      "Address": 37,
+      "Name": "点位37",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位37"
+    },
+    {
+      "Address": 38,
+      "Name": "点位38",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位38"
+    },
+    {
+      "Address": 39,
+      "Name": "点位39",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位39"
+    }
+  ],
+  "Storage": {
+    "TableName": "Test1",
+    "Mode": 1
+  }
+}
