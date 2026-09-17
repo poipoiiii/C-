@@ -9,6 +9,74 @@
                 <ResourceDictionary Source="pack://application:,,,/HandyControl;component/Themes/SkinDefault.xaml" />
                 <ResourceDictionary Source="pack://application:,,,/HandyControl;component/Themes/Theme.xaml" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- 下面是全应用共用的样式：主窗口与「表记录历史」弹窗都用同一套，放在这里两边才都能 StaticResource 到 -->
+
+            <!-- 分区标题 / 说明 -->
+            <Style x:Key="SectionTitle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="FontWeight" Value="Bold" />
+                <Setter Property="Foreground" Value="#303133" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+            </Style>
+            <Style x:Key="SectionHint" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="Foreground" Value="#909399" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="Margin" Value="10,0,0,0" />
+            </Style>
+            <Style x:Key="Divider" TargetType="Rectangle">
+                <Setter Property="Width" Value="1" />
+                <Setter Property="Height" Value="24" />
+                <Setter Property="Fill" Value="#EBEEF5" />
+                <Setter Property="Margin" Value="14,0" />
+            </Style>
+
+            <!-- 数据表统一样式：行高、斑马纹、横向细线 -->
+            <Style x:Key="FlatHeader" TargetType="DataGridColumnHeader"
+                   BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+            <Style x:Key="FlatGrid" TargetType="DataGrid">
+                <Setter Property="AutoGenerateColumns" Value="False" />
+                <Setter Property="RowHeight" Value="34" />
+                <Setter Property="ColumnHeaderHeight" Value="36" />
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="Background" Value="White" />
+                <Setter Property="RowBackground" Value="White" />
+                <Setter Property="AlternatingRowBackground" Value="#FAFBFC" />
+                <Setter Property="BorderBrush" Value="#EBEEF5" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="GridLinesVisibility" Value="Horizontal" />
+                <Setter Property="HorizontalGridLinesBrush" Value="#F0F2F5" />
+                <Setter Property="HeadersVisibility" Value="Column" />
+                <Setter Property="CanUserAddRows" Value="False" />
+                <Setter Property="CanUserResizeRows" Value="False" />
+                <Setter Property="CanUserReorderColumns" Value="False" />
+                <Setter Property="SelectionUnit" Value="FullRow" />
+                <Setter Property="ColumnHeaderStyle" Value="{StaticResource FlatHeader}" />
+            </Style>
+            <!-- 单元格文本：左右各自留白，避免贴边 -->
+            <Style x:Key="CellText" TargetType="TextBlock">
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="Margin" Value="10,0" />
+                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            </Style>
+            <Style x:Key="CellNumber" TargetType="TextBlock" BasedOn="{StaticResource CellText}">
+                <Setter Property="HorizontalAlignment" Value="Right" />
+                <Setter Property="FontFamily" Value="Consolas" />
+            </Style>
+            <Style x:Key="CellMono" TargetType="TextBlock" BasedOn="{StaticResource CellText}">
+                <Setter Property="FontFamily" Value="Consolas" />
+            </Style>
+
+            <!-- 状态栏提示块 -->
+            <Style x:Key="StatusChip" TargetType="Border">
+                <Setter Property="CornerRadius" Value="3" />
+                <Setter Property="Padding" Value="10,5" />
+                <Setter Property="Margin" Value="8,0,0,0" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

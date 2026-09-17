@@ -23,7 +23,7 @@ public sealed class TriggerWatchService : IDisposable
         WaitingSignalClear
     }
 
-    private readonly ModbusService _modbus;
+    private readonly IModbusClient _modbus;
     private readonly IReadOnlyList<TriggerRule> _rules;
 
     private readonly Dictionary<TriggerRule, Step> _steps = [];
@@ -35,7 +35,7 @@ public sealed class TriggerWatchService : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _loop;
 
-    public TriggerWatchService(ModbusService modbus, IReadOnlyList<TriggerRule> rules)
+    public TriggerWatchService(IModbusClient modbus, IReadOnlyList<TriggerRule> rules)
     {
         _modbus = modbus;
         _rules = rules;

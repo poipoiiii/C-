@@ -1,9 +1,4 @@
-using System.Collections;
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
-using System.ComponentModel;
-using System.Data;
-using System.Text;
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -11,19 +6,17 @@ using CommunityToolkit.Mvvm.Input;
 using PlcCore.Services;
 using PlcHmi.Models;
 using PlcHmi.Services;
-using SkiaSharp;
+using Serilog;
 
 namespace PlcHmi.ViewModels;
 
 /// <summary>
-/// 看板主视图模型：连接与采集控制、实时点位与曲线、点位扫描配置、存储映射、数据库记录。
-/// 实时数据来自 Modbus（内存），持久化与查询按「存储映射」走动态表 —— 双数据源。
+/// 外壳视图模型：只管**跨页签**的东西 —— 机型配置、连接、采集生命周期，以及状态栏。
+/// 四个页签各有自己的视图模型（<see cref="Dashboard"/> / <see cref="Scan"/> / <see cref="Storage"/> / <see cref="Trigger"/>），
+/// 它们通过这里的 <see cref="Config"/>、<see cref="Modbus"/> 拿共享状态，并把"点位变了""要保存"这类请求交回来。
 /// </summary>
 public partial class MainViewModel : ObservableObject
 {
-    /// <summary>最近记录区每次从数据库取多少条</summary>
-    private const int RecentRecordCount = 50;
-
     /// <summary>从站探测范围（协议里 UnitId 是 0~247，0 一般作广播，现场多从 1 开始且很少超过 32）</summary>
     private const byte ProbeStartId = 1;
     private const byte ProbeEndId = 32;
@@ -31,28 +24,361 @@ public partial class MainViewModel : ObservableObject
     /// <summary>单个从站的探测超时：短一点，避免探测一轮等太久</summary>
     private const int ProbeTimeoutMs = 400;
 
-    private static readonly SKColor[] Palette =
-    [
-        SKColor.Parse("#E6A23C"),
-        SKColor.Parse("#409EFF"),
-        SKColor.Parse("#67C23A"),
-        SKColor.Parse("#F56C6C"),
-        SKColor.Parse("#9B59B6"),
-        SKColor.Parse("#909399")
-    ];
-
     private readonly Dispatcher _dispatcher = Application.Current.Dispatcher;
-    private readonly DispatcherTimer _recordTimer;
-    private readonly PlcConfig _config;
-    private readonly ModbusScanService _scanService = new();
-    private readonly SlaveProbeService _probeService = new();
-    private readonly DynamicTableStore _tableStore = new();
-    private readonly TriggerLogStore _triggerStore = new();
+    private readonly AppServices _services;
 
-    private ModbusService? _modbus;
+    /// <summary>本机档案（data/machine.json）：机台号 + 连接参数 + 当前机型。机型配置里不再放这些</summary>
+    private MachineProfile _machine;
+
+    /// <summary>当前机型的配置；切换机型时整份换掉</summary>
+    private PlcConfig _config;
+
+    /// <summary>当前机型的配置读写（一个实例对应一个机型）</summary>
+    private ConfigStore _store;
+
+    /// <summary>切换机型期间为 true：避免下拉框回滚/重复触发又走一遍切换</summary>
+    private bool _switchingProfile;
+
+    private IModbusClient? _modbus;
     private PlcAcquisitionService? _acquisition;
     private TriggerWatchService? _triggerWatch;
-    private CancellationTokenSource? _scanCts;
+
+    public MainViewModel() : this(AppServices.Default)
+    {
+    }
+
+    public MainViewModel(AppServices services)
+    {
+        _services = services;
+
+        // 机型：命令行 --config / --machine > 本机档案（机台号、上次选的机型）> 已有配置 > 已知机型第一个
+        _machine = MachineStore.Load();
+        string profile = ProfileResolver.Resolve(Environment.GetCommandLineArgs(), _machine);
+        _store = ConfigStore.Open(profile);
+
+        // 现场副本不在就从随包发布的机型模板复制一份；模板也缺，说明安装包不完整，退回内置默认点位
+        string? templateWarning = ConfigStore.EnsureConfigFile(profile)
+            ? null
+            : $"没找到机型模板 Templates/{profile}.json（安装包可能不完整）：已按内置默认点位建了 {profile}.json，请核对点位表";
+
+        _config = _store.Load();
+        ReconcileDefaultColumnNames(_config.Tags);
+        MigrateMachineProfile();                     // 老配置里的机台号/连接参数搬进本机档案
+        _machineNo = _machine.MachineNo;             // 直接写字段：启动不该触发一次保存
+
+        if (_machine.Profile != profile)
+        {
+            _machine.Profile = profile;
+            SaveMachineQuietly();
+        }
+
+        // 四个页签各一个视图模型；它们都拿外壳当共享上下文
+        Storage = new StorageViewModel(this, services);
+        Dashboard = new DashboardViewModel(this, services);
+        Scan = new ScanViewModel(this, services);
+        Trigger = new TriggerViewModel(this, services);
+
+        Dashboard.Rebuild();
+        ApplyConnectionConfig();
+        RefreshProfileList();
+        if (_store.LoadWarning is { } warning)
+        {
+            StatusText = warning;
+            Log.Warning("配置告警：{Warning}", warning);
+        }
+        else if (templateWarning is not null)
+        {
+            StatusText = templateWarning;
+            Log.Warning("{Warning}", templateWarning);
+        }
+
+        Log.Information("已启动：机台号 {MachineNo} · 机型 {Profile}（{ConfigFile}）",
+            NeedsMachineNo ? "未填" : MachineNo, _store.Profile, _store.FilePath);
+
+        _ = Storage.RefreshTablesAsync();
+        _ = Dashboard.RefreshRecordsAsync();
+        _ = ProbeSlavesAsync();   // 打开就探一遍从站，下拉框里直接可选
+    }
+
+    // ---------------- 共享上下文（给四个页签用） ----------------
+
+    /// <summary>当前机型的配置：点位表、存储组、触发规则都在里面</summary>
+    public PlcConfig Config => _config;
+
+    /// <summary>当前机型的配置读写</summary>
+    public ConfigStore Store => _store;
+
+    /// <summary>已连接的 Modbus 客户端；没连接时为 null</summary>
+    public IModbusClient? Modbus => _modbus;
+
+    /// <summary>触发监听；没在监听时为 null（轮询间隔改这个对象的属性即可生效）</summary>
+    public TriggerWatchService? TriggerWatch => _triggerWatch;
+
+    public DashboardViewModel Dashboard { get; }
+
+    public ScanViewModel Scan { get; }
+
+    public StorageViewModel Storage { get; }
+
+    public TriggerViewModel Trigger { get; }
+
+    // ---------------- 本机档案与机型 ----------------
+
+    /// <summary>机型下拉项：已知机型 + data/configs 里已有的自定义档案（例如老的「默认」），别让老档案变成孤儿</summary>
+    public ObservableCollection<MachineModel> Profiles { get; } = [];
+
+    /// <summary>当前机型。机台号能认出机型时自动切过去；认不出就靠这个下拉手工选</summary>
+    [ObservableProperty] private MachineModel? _selectedProfile;
+
+    [ObservableProperty] private string _profileStatus = string.Empty;
+
+    /// <summary>机台号有问题时的提示（空 = 没问题），状态栏标出来</summary>
+    [ObservableProperty] private string _machineNoHint = string.Empty;
+
+    /// <summary>
+    /// 机台号：现场这台设备的编号（4 字母 + 3 数字，前 4 位决定机型）。
+    /// 进项目时若为空，界面会弹框让用户填；改这里立刻落盘，写触发记录时自动带上（见 TriggerViewModel）。
+    /// </summary>
+    [ObservableProperty] private string _machineNo = string.Empty;
+
+    /// <summary>还没填机台号：界面据此决定要不要弹输入框</summary>
+    public bool NeedsMachineNo => string.IsNullOrWhiteSpace(MachineNo);
+
+    /// <summary>
+    /// 机台号改了：存进本机档案，并按前 4 位自动切到对应机型（AIXP999 → AIXP）。
+    /// 认不出机型不算错误 —— 保留当前机型、提示用户手工选：现场允许临时接一台没登记的机器。
+    /// </summary>
+    partial void OnMachineNoChanged(string value)
+    {
+        string machineNo = value?.Trim() ?? string.Empty;
+        _machine.MachineNo = machineNo;
+        OnPropertyChanged(nameof(NeedsMachineNo));
+
+        if (!MachineModels.TryResolve(machineNo, out var model))
+        {
+            MachineNoHint = machineNo.Length == 0
+                ? string.Empty
+                : $"机台号「{machineNo}」认不出机型（应为{MachineModels.FormatHint}），请在机型框里手工选";
+            SaveMachineQuietly();
+            RefreshProfileStatus();
+            return;
+        }
+
+        MachineNoHint = string.Empty;
+
+        if (model.Code == _store.Profile)
+        {
+            SaveMachineQuietly();
+            RefreshProfileStatus();
+            StatusText = $"机台号 {machineNo} → 机型 {model.Display}";
+            return;
+        }
+
+        _machine.Profile = model.Code;
+        SaveMachineQuietly();
+        _ = SwitchProfileAsync(model.Code);
+    }
+
+    /// <summary>机型下拉变了（用户手工选）：换一套点位表 / 存储组 / 触发规则</summary>
+    partial void OnSelectedProfileChanged(MachineModel? value)
+    {
+        if (value is null || _switchingProfile || value.Code == _store.Profile)
+        {
+            return;
+        }
+
+        // 手工选的机型记进本机档案：下次开机还用它（机台号一改则按机台号重推）
+        _machine.Profile = value.Code;
+        SaveMachineQuietly();
+        _ = SwitchProfileAsync(value.Code);
+    }
+
+    /// <summary>机型下拉：已知机型在前，data/configs 里已有的自定义档案在后</summary>
+    private void RefreshProfileList()
+    {
+        string current = _store.Profile;
+
+        Profiles.Clear();
+        foreach (var model in MachineModels.All)
+        {
+            Profiles.Add(model);
+        }
+
+        foreach (var name in ConfigStore.ListProfiles().Where(name => MachineModels.Find(name) is null))
+        {
+            Profiles.Add(new MachineModel(name, "自定义"));
+        }
+
+        // 这里只是把选中项拨回当前机型，别当成用户在切换
+        _switchingProfile = true;
+        try
+        {
+            SelectedProfile = Profiles.FirstOrDefault(m => m.Code == current) ?? SelectedProfile;
+        }
+        finally
+        {
+            _switchingProfile = false;
+        }
+
+        RefreshProfileStatus();
+    }
+
+    /// <summary>状态栏那行机型提示；手工选的机型与机台号推出来的不一致时点出来</summary>
+    private void RefreshProfileStatus()
+    {
+        string name = MachineModels.Find(_store.Profile)?.Name ?? "自定义机型";
+        ProfileStatus = $"当前机型：{_store.Profile}（{name}）· {_store.FilePath}";
+
+        if (MachineModels.TryResolve(MachineNo, out var implied) && implied.Code != _store.Profile)
+        {
+            ProfileStatus += $"　⚠ 与机台号 {MachineNo} 推出来的 {implied.Code} 不一致（机型是手工选的）";
+        }
+    }
+
+    /// <summary>本机档案落盘；失败只在状态栏提示，不打断操作</summary>
+    private void SaveMachineQuietly()
+    {
+        try
+        {
+            MachineStore.Save(_machine);
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"本机档案保存失败：{ex.Message}";
+            Log.Error(ex, "本机档案保存失败：{File}", AppPaths.MachineFile);
+        }
+    }
+
+    /// <summary>
+    /// 老配置把机台号与连接参数存在机型配置里（那时"一台机器一份配置"），现在搬到 data/machine.json：
+    /// 机器级的东西跟着设备走，机型配置才能做到同型号完全一致、整份复制给另一台机器用。
+    /// </summary>
+    private void MigrateMachineProfile()
+    {
+        bool machineChanged = false;
+
+        if (string.IsNullOrWhiteSpace(_machine.MachineNo) && !string.IsNullOrWhiteSpace(_config.LegacyMachineNo))
+        {
+            _machine.MachineNo = _config.LegacyMachineNo.Trim();
+            machineChanged = true;
+        }
+
+        if (_config.LegacyConnection is { } legacy)
+        {
+            _machine.Ip = legacy.Ip;
+            _machine.Port = legacy.Port;
+            _machine.SlaveId = legacy.SlaveId;
+            _machine.IntervalMs = legacy.IntervalMs;
+            machineChanged = true;
+        }
+
+        if (_config.LegacyMachineNo is null && _config.LegacyConnection is null)
+        {
+            if (machineChanged)
+            {
+                SaveMachineQuietly();
+            }
+
+            return;
+        }
+
+        // 老字段清掉：机器级信息以后只写在 machine.json 里
+        _config.LegacyMachineNo = null;
+        _config.LegacyConnection = null;
+        SaveConfigNow();
+        SaveMachineQuietly();
+
+        Log.Information("已把机台号/连接参数从机型配置搬到 {File}", AppPaths.MachineFile);
+    }
+
+    /// <summary>
+    /// 切换机型：先断开连接，再整份换配置。
+    /// 现场副本不在就从机型模板复制一份（第一次上这个型号就是这么建档案的）。
+    /// 机台号与连接参数属于本机档案，不跟着机型走。
+    /// </summary>
+    private async Task SwitchProfileAsync(string profile)
+    {
+        _switchingProfile = true;
+        try
+        {
+            if (IsConnected)
+            {
+                await DisconnectAsync();
+            }
+
+            Scan.CancelIfScanning();
+            ConfigStore.EnsureConfigFile(profile);
+
+            // 先把新机型读出来，读失败就整个放弃、继续用原机型（_store 保持不动）
+            var next = ConfigStore.Open(profile);
+            var nextConfig = next.Load();
+            _store = next;
+            _config = nextConfig;
+            ReconcileDefaultColumnNames(_config.Tags);
+
+            // 四个页签各自按新配置重建（点位表、组表草稿、规则、卡片）
+            Scan.OnConfigChanged();
+            Trigger.OnConfigChanged();
+            Storage.RebuildFromConfig();
+            Dashboard.Rebuild();
+
+            RefreshProfileList();
+
+            StatusText = _store.LoadWarning ??
+                $"已切换到机型「{profile}」（{MachineModels.Find(profile)?.Name ?? "自定义"}）：" +
+                $"{_config.Tags.Count} 个点位 · {_config.Groups.Count} 个存储组";
+            Log.Information("已切换机型：{Profile}（{ConfigFile}）", profile, _store.FilePath);
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"切换机型失败：{ex.Message}";
+            Log.Error(ex, "切换机型失败：{Profile}", profile);
+            RefreshProfileList();
+        }
+        finally
+        {
+            _switchingProfile = false;
+        }
+    }
+
+    /// <summary>
+    /// 兼容修复：早期版本改「名称」不会同步「宽表列名」，配置里会留下「名称=热封数量、列名=点位22」这种不一致。
+    /// 列名若仍是扫描加入时的默认占位名（点位N），就按名称纠正过来；手工改过的列名不动。
+    /// </summary>
+    private static void ReconcileDefaultColumnNames(IEnumerable<PlcTag> tags)
+    {
+        foreach (var tag in tags)
+        {
+            if (tag.ColumnName == $"点位{tag.Address}" && tag.Name != tag.ColumnName)
+            {
+                tag.ColumnName = tag.Name;
+            }
+        }
+    }
+
+    /// <summary>把当前配置落盘；失败会抛，由调用方决定怎么提示</summary>
+    public void SaveConfigNow() => _store.Save(_config);
+
+    /// <summary>点位变了：重建卡片、存盘，采集中则重启采集让新点位生效</summary>
+    public void OnTagsChanged()
+    {
+        Dashboard.Rebuild();
+
+        try
+        {
+            SaveConfigNow();
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"配置保存失败：{ex.Message}";
+            Log.Error(ex, "配置保存失败：{ConfigFile}", _store.FilePath);
+        }
+
+        if (IsAcquiring)
+        {
+            _ = RestartAcquisitionAsync();
+        }
+    }
 
     // ---------------- 连接与采集 ----------------
 
@@ -69,154 +395,100 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _persistEnabled = true;
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(ConnectCommand))]
-    [NotifyCanExecuteChangedFor(nameof(DisconnectCommand))]
-    [NotifyCanExecuteChangedFor(nameof(ScanCommand))]
     private bool _isConnected;
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(StartCommand))]
-    [NotifyCanExecuteChangedFor(nameof(StopCommand))]
     private bool _isAcquiring;
 
     [ObservableProperty] private string _statusText = "未连接";
     [ObservableProperty] private string _commError = string.Empty;
     [ObservableProperty] private string _persistError = string.Empty;
-    [ObservableProperty] private string _recordsInfo = "未加载";
 
-    // ---------------- 点位扫描 ----------------
+    /// <summary>
+    /// 工具条上就两个开关，勾选状态即系统状态（勾上=已连接 / 采集中），按钮文字写的是"点下去会发生什么"（连接↔断开、开始采集↔停止采集）。
+    /// 用户点击 → 走下面的动作；状态回写（连接失败、切换机型等）→ 经 <see cref="_syncingSwitches"/> 只改显示，不再触发动作。
+    /// </summary>
+    [ObservableProperty] private bool _connectionSwitch;
 
-    [ObservableProperty] private string _scanStart = "40001";
-    [ObservableProperty] private string _scanEnd = "40040";
-    [ObservableProperty] private int _scanBatchSize = 10;
-    [ObservableProperty] private string _scanStatus = "未扫描";
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(ScanCommand))]
-    [NotifyCanExecuteChangedFor(nameof(CancelScanCommand))]
-    private bool _isScanning;
+    [ObservableProperty] private bool _acquisitionSwitch;
 
-    [ObservableProperty] private string _tagStatus = "";
+    /// <summary>正在由状态回写开关：挡住开关的变更处理器，免得连接/断开动作被反过来又触发一遍</summary>
+    private bool _syncingSwitches;
 
-    // ---------------- 存储映射 ----------------
-
-    /// <summary>界面上的组表草稿，点【建表 / 校验结构】或【保存配置】才提交成生效配置</summary>
-    public ObservableCollection<StorageGroup> Groups { get; }
-
-    /// <summary>组名清单，供界面展示</summary>
-    public ObservableCollection<string> GroupNames { get; } = [];
-
-    [ObservableProperty] private StorageGroup? _selectedGroup;
-    [ObservableProperty] private string _storageStatus = "";
-    [ObservableProperty] private string _createScriptPreview = "";
-    [ObservableProperty] private string _effectiveStorageText = "";
-    [ObservableProperty] private DataView? _recentView;
-
-    // ---------------- 触发记录（握手模拟上升沿） ----------------
-
-    /// <summary>触发记录规则（直接就是配置对象里的集合）</summary>
-    public ObservableCollection<TriggerRule> Triggers { get; }
-
-    [ObservableProperty] private TriggerRule? _selectedTrigger;
-
-    /// <summary>信号轮询间隔（毫秒）：触发频繁就调小，默认 100</summary>
-    [ObservableProperty] private int _triggerPollIntervalMs = 100;
-
-    [ObservableProperty] private string _triggerStatus = "未监听";
-    [ObservableProperty] private string _triggerAlarm = string.Empty;
-    [ObservableProperty] private int _triggerCount;
-    [ObservableProperty] private DataView? _triggerView;
-    [ObservableProperty] private string _triggerRecordsInfo = "未加载";
-
-    private readonly HashSet<string> _stuckRules = [];
-
-    public MainViewModel()
+    partial void OnConnectionSwitchChanged(bool value)
     {
-        _config = ConfigStore.Load();
-        ReconcileDefaultColumnNames(_config.Tags);
-        TagConfigs = _config.Tags;
-        Triggers = _config.Triggers;
-
-        // 组表在界面上是草稿，改完要点【建表 / 校验结构】或【保存配置】才提交
-        Groups = [.. _config.Groups.Select(g => g.Clone())];
-        Groups.CollectionChanged += OnGroupsChanged;
-        foreach (var group in Groups)
+        if (_syncingSwitches)
         {
-            group.PropertyChanged += OnGroupPropertyChanged;
+            return;
         }
 
-        RefreshGroupNames();
-        RefreshTagGroups();
-        SelectedGroup = Groups.FirstOrDefault();
-
-        ModeOptions =
-        [
-            new StorageModeOption(StorageMode.Long, "长表：一行一个点位（时间/地址/原始值/工程值）"),
-            new StorageModeOption(StorageMode.Wide, "宽表：一行一个时刻（时间 + 每个点位一列）")
-        ];
-
-        RebuildTags();
-        AttachTagSubscriptions();
-        UpdateScriptPreview();
-        UpdateEffectiveStorageText();
-
-        // 采集期间每 5 秒从数据库拉一次最近记录
-        _recordTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-        _recordTimer.Tick += async (_, _) =>
+        if (value)
         {
-            if (IsAcquiring)
-            {
-                await RefreshRecordsAsync();
-            }
-
-            if (_triggerWatch is not null)
-            {
-                await RefreshTriggerRecordsAsync();
-            }
-        };
-        _recordTimer.Start();
-
-        _ = RefreshTablesAsync();
-        _ = RefreshRecordsAsync();
-        _ = ProbeSlavesAsync();   // 打开就探一遍从站，下拉框里直接可选
+            ConnectInternal();
+        }
+        else
+        {
+            _ = DisconnectAsync();
+        }
     }
 
-    /// <summary>实时卡片与曲线，跟随点位表重建</summary>
-    public ObservableCollection<TagViewModel> Tags { get; } = [];
+    partial void OnAcquisitionSwitchChanged(bool value)
+    {
+        if (_syncingSwitches)
+        {
+            return;
+        }
 
-    /// <summary>可编辑的采集点位表（直接就是配置对象里的集合）</summary>
-    public ObservableCollection<PlcTag> TagConfigs { get; }
+        if (value)
+        {
+            StartAcquisition();
+        }
+        else
+        {
+            _ = StopAcquisitionAsync();
+        }
+    }
 
-    /// <summary>扫描结果</summary>
-    public ObservableCollection<ScanResult> ScanResults { get; } = [];
+    partial void OnIsConnectedChanged(bool value) => SyncSwitches();
 
-    /// <summary>库里已有的表</summary>
-    public ObservableCollection<string> Tables { get; } = [];
+    partial void OnIsAcquiringChanged(bool value) => SyncSwitches();
 
-    /// <summary>探测到的从站号，供工具栏下拉框选择</summary>
-    public ObservableCollection<byte> SlaveIds { get; } = [];
+    /// <summary>把两个开关拨到与当前状态一致（动作没生效时靠它把开关还原）</summary>
+    private void SyncSwitches()
+    {
+        if (_syncingSwitches)
+        {
+            return;
+        }
 
-    public IReadOnlyList<StorageModeOption> ModeOptions { get; }
+        _syncingSwitches = true;
+        try
+        {
+            ConnectionSwitch = IsConnected;
+            AcquisitionSwitch = IsAcquiring;
+        }
+        finally
+        {
+            _syncingSwitches = false;
+        }
+    }
 
-    // ---------------- 连接 ----------------
-
-    private bool CanConnect() => !IsConnected;
-
-    [RelayCommand(CanExecute = nameof(CanConnect))]
-    private void Connect() => ConnectInternal();
-
-    /// <summary>连接 PLC（切换从站后也走这里重连）</summary>
+    /// <summary>
+    /// 连接 PLC（切换从站后也走这里重连）。只建链路，不自动开采集 —— 采集由采集开关单独控制，
+    /// 免得连上就往库里写数据。
+    /// </summary>
     private void ConnectInternal()
     {
         try
         {
-            _modbus = new ModbusService(SlaveId);
+            _modbus = _services.CreateModbusClient(SlaveId);
             _modbus.Connect(Ip, Port);
 
             IsConnected = true;
             CommError = string.Empty;
-            StatusText = $"已连接 {Ip}:{Port}（从站 {SlaveId}）";
-            StartAcquisition();
-            StartTriggerWatch();
+            StatusText = $"已连接 {Ip}:{Port}（从站 {SlaveId}）· 未采集";
+            Log.Information("已连接 PLC：{Ip}:{Port}（从站 {SlaveId}）", Ip, Port, SlaveId);
+            PersistConnectionConfig();
         }
         catch (Exception ex)
         {
@@ -225,26 +497,48 @@ public partial class MainViewModel : ObservableObject
             IsConnected = false;
             StatusText = "连接失败";
             CommError = $"连接失败：{ex.Message}";
+            Log.Error(ex, "连接 PLC 失败：{Ip}:{Port}（从站 {SlaveId}）", Ip, Port, SlaveId);
+
+            // 连不上时 IsConnected 没变过，不会触发状态回写，开关得手动拨回来
+            SyncSwitches();
         }
     }
 
-    private bool CanDisconnect() => IsConnected;
+    /// <summary>把本机档案里的连接参数填回界面（启动时用；切机型不动它们）</summary>
+    private void ApplyConnectionConfig()
+    {
+        Ip = _machine.Ip;
+        Port = _machine.Port;
+        IntervalMs = _machine.IntervalMs;
 
-    [RelayCommand(CanExecute = nameof(CanDisconnect))]
+        // 先赋 SlaveId（未连接时它的变更处理器直接返回），再赋文本：
+        // 反过来的话会经由 SelectSlave 弹一句“已切换到从站 N”
+        SlaveId = _machine.SlaveId;
+        SlaveIdText = _machine.SlaveId.ToString();
+    }
+
+    /// <summary>连接参数写进本机档案：连上一次就记住，下次启动不用重填（跟着设备走，不跟着机型走）</summary>
+    private void PersistConnectionConfig()
+    {
+        _machine.Ip = Ip;
+        _machine.Port = Port;
+        _machine.SlaveId = SlaveId;
+        _machine.IntervalMs = IntervalMs;
+        SaveMachineQuietly();
+    }
+
+    /// <summary>断开：停采集（连带触发监听）+ 断链路</summary>
     private async Task DisconnectAsync()
     {
         await StopAcquisitionAsync();
-        await StopTriggerWatchAsync();
-        _scanCts?.Cancel();
+        Scan.CancelIfScanning();
         _modbus?.Dispose();
         _modbus = null;
 
         IsConnected = false;
         StatusText = "已断开";
-        foreach (var tag in Tags)
-        {
-            tag.MarkOffline();
-        }
+        Dashboard.MarkAllOffline();
+        Log.Information("已断开 PLC 连接");
     }
 
     // ---------------- 从站探测与切换 ----------------
@@ -254,6 +548,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ProbeSlavesCommand))]
     private bool _isProbing;
+
+    /// <summary>探测到的从站号，供工具栏下拉框选择</summary>
+    public ObservableCollection<byte> SlaveIds { get; } = [];
 
     private bool CanProbeSlaves() => !IsProbing;
 
@@ -267,7 +564,7 @@ public partial class MainViewModel : ObservableObject
         try
         {
             var progress = new Progress<string>(message => SlaveProbeStatus = message);
-            var results = await _probeService.ProbeAsync(
+            var results = await _services.ProbeService.ProbeAsync(
                 Ip, Port, ProbeStartId, ProbeEndId, ProbeTimeoutMs, progress, CancellationToken.None);
 
             var found = results.Where(r => r.Responded).Select(r => r.UnitId).ToList();
@@ -341,43 +638,42 @@ public partial class MainViewModel : ObservableObject
         _ = SwitchSlaveAsync();
     }
 
-    /// <summary>从站号变了：重连并重启采集（ModbusService 的从站号是构造时固定的）</summary>
+    /// <summary>从站号变了：重连并按需恢复采集（ModbusService 的从站号是构造时固定的）</summary>
     private async Task SwitchSlaveAsync()
     {
+        // 换从站属于程序内部重连，不是用户按了停止：原来在采就接着采
+        bool wasAcquiring = IsAcquiring;
+
         await StopAcquisitionAsync();
-        await StopTriggerWatchAsync();
         _modbus?.Dispose();
         _modbus = null;
         IsConnected = false;
 
         ConnectInternal();
+
+        if (wasAcquiring)
+        {
+            StartAcquisition();
+        }
     }
 
     // ---------------- 采集控制 ----------------
 
-    private bool CanStart() => IsConnected && !IsAcquiring;
-
-    [RelayCommand(CanExecute = nameof(CanStart))]
-    private void Start() => StartAcquisition();
-
-    private bool CanStop() => IsAcquiring;
-
-    [RelayCommand(CanExecute = nameof(CanStop))]
-    private Task Stop() => StopAcquisitionAsync();
-
+    /// <summary>开始采集：采集循环 + 触发监听一起起来（没有启用的规则时监听自己会跳过）</summary>
     private void StartAcquisition()
     {
-        if (_modbus is null || IsAcquiring || TagConfigs.Count == 0)
+        if (_modbus is null || IsAcquiring || _config.Tags.Count == 0)
         {
-            if (TagConfigs.Count == 0)
+            if (_config.Tags.Count == 0)
             {
-                TagStatus = "点位表是空的，先去「采集点位」页扫描或添加点位";
+                Scan.TagStatus = "点位表是空的，先去「采集点位」页扫描或添加点位";
             }
 
+            SyncSwitches();   // 没真正开起来，把开关拨回去
             return;
         }
 
-        _acquisition = new PlcAcquisitionService(_modbus, [.. TagConfigs], BuildReadRanges())
+        _acquisition = new PlcAcquisitionService(_modbus, [.. _config.Tags], BuildReadRanges())
         {
             IntervalMs = IntervalMs,
             PersistEnabled = PersistEnabled,
@@ -390,12 +686,23 @@ public partial class MainViewModel : ObservableObject
 
         IsAcquiring = true;
         StatusText = PersistEnabled
-            ? $"采集中：{IntervalMs} ms/次 · 从站 {SlaveId} · {TagConfigs.Count} 个点位 → {_config.Groups.Count} 张表"
-            : $"采集中：{IntervalMs} ms/次 · 从站 {SlaveId} · {TagConfigs.Count} 个点位，未落库";
+            ? $"采集中：{IntervalMs} ms/次 · 从站 {SlaveId} · {_config.Tags.Count} 个点位 → {_config.Groups.Count} 张表"
+            : $"采集中：{IntervalMs} ms/次 · 从站 {SlaveId} · {_config.Tags.Count} 个点位，未落库";
+        Log.Information("开始采集：{IntervalMs} ms/次 · 从站 {SlaveId} · {TagCount} 个点位 · 落库 {PersistEnabled}",
+            IntervalMs, SlaveId, _config.Tags.Count, PersistEnabled);
+
+        // 采集与触发监听是一套生命周期：开采集就把监听一起起来
+        StartTriggerWatch();
     }
 
+    /// <summary>
+    /// 停止采集：连触发监听一起停 —— 监听还在跑意味着还在给 PLC 写应答位，
+    /// 「已停采集但还在动设备」这种状态没人想要。
+    /// </summary>
     private async Task StopAcquisitionAsync()
     {
+        await StopTriggerWatchAsync();
+
         if (_acquisition is null)
         {
             return;
@@ -419,13 +726,13 @@ public partial class MainViewModel : ObservableObject
         {
             foreach (var sample in batch.Samples)
             {
-                var tag = Tags.FirstOrDefault(t => t.Tag.Address == sample.Tag.Address);
+                var tag = Dashboard.Tags.FirstOrDefault(t => t.Tag.Address == sample.Tag.Address);
                 tag?.Apply(sample);
             }
 
             foreach (var failure in batch.Failures)
             {
-                var tag = Tags.FirstOrDefault(t => t.Tag.Address == failure.Tag.Address);
+                var tag = Dashboard.Tags.FirstOrDefault(t => t.Tag.Address == failure.Tag.Address);
                 tag?.MarkFailed(failure.Reason);
             }
 
@@ -453,7 +760,7 @@ public partial class MainViewModel : ObservableObject
         _dispatcher.BeginInvoke(() =>
         {
             CommError = $"采集失败：{message}";
-            foreach (var tag in Tags)
+            foreach (var tag in Dashboard.Tags)
             {
                 tag.MarkOffline();
             }
@@ -464,6 +771,7 @@ public partial class MainViewModel : ObservableObject
     private void OnPersistFailed(string message)
     {
         _dispatcher.BeginInvoke(() => PersistError = $"落库失败：{message}");
+        Log.Error("落库失败：{Message}", message);
     }
 
     partial void OnIntervalMsChanged(int value)
@@ -483,11 +791,17 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>交给采集循环的读取区段：只取真有点位的组，空区段读回来也没地方写</summary>
+    private IReadOnlyList<ReadRange> BuildReadRanges() =>
+        [.. _config.Groups
+            .Where(g => g.Count > 0 && _config.Tags.Any(t => g.Covers(t.Address)))
+            .OrderBy(g => g.StartAddress)
+            .Select(g => new ReadRange(g.StartAddress, g.Count))];
+
     /// <summary>
     /// 按存储组把一批数据拆开，各组并发写自己的目标表。
-    /// 归组看地址落在哪个区段（用 _config.Groups 生效值，不看点位上那份展示用的缓存）；
-    /// 界面上的组表是草稿，点【建表/校验结构】或【保存配置】后才生效，
-    /// 免得边打字边把数据写到还不存在的表上。并发写是为了让慢的那张表不拖住其它组。
+    /// 归组看地址落在哪个区段（用生效配置，不看界面上那份草稿）；
+    /// 并发写是为了让慢的那张表不拖住其它组。
     /// </summary>
     private async Task PersistBatchAsync(IReadOnlyList<Sample> batch)
     {
@@ -507,8 +821,8 @@ public partial class MainViewModel : ObservableObject
             }
 
             jobs.Add(group.Mode == StorageMode.Wide
-                ? _tableStore.InsertWideAsync(group.TableName, samples)
-                : _tableStore.InsertLongAsync(group.TableName, samples));
+                ? _services.TableStore.InsertWideAsync(group.TableName, samples, group.Shape)
+                : _services.TableStore.InsertLongAsync(group.TableName, samples, group.Shape));
         }
 
         if (jobs.Count > 0)
@@ -525,601 +839,33 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    // ---------------- 点位扫描 ----------------
-
-    private bool CanScan() => IsConnected && !IsScanning;
-
-    [RelayCommand(CanExecute = nameof(CanScan))]
-    private async Task ScanAsync()
-    {
-        if (_modbus is null)
-        {
-            return;
-        }
-
-        if (!TryParseAddress(ScanStart, out var start) || !TryParseAddress(ScanEnd, out var end))
-        {
-            ScanStatus = "地址格式不对，示例：40001（人读地址）或 0（协议地址）";
-            return;
-        }
-
-        if (end < start)
-        {
-            ScanStatus = "结束地址不能小于起始地址";
-            return;
-        }
-
-        var batchSize = (ushort)Math.Clamp(ScanBatchSize, 1, 120);
-        _scanCts = new CancellationTokenSource();
-        IsScanning = true;
-        ScanResults.Clear();
-        ScanStatus = $"扫描中：{start} ~ {end}（协议地址），每段 {batchSize} 个";
-
-        try
-        {
-            var progress = new Progress<string>(message => ScanStatus = message);
-            var results = await _scanService.ScanAsync(_modbus, start, end, batchSize, progress, _scanCts.Token);
-
-            foreach (var result in results)
-            {
-                ScanResults.Add(result);
-            }
-
-            int readable = results.Count(r => r.IsReadable);
-            ScanStatus = $"扫描完成：共 {results.Count} 个地址，可读 {readable} 个，读异常 {results.Count - readable} 个";
-        }
-        catch (OperationCanceledException)
-        {
-            ScanStatus = "扫描已取消";
-        }
-        catch (Exception ex)
-        {
-            ScanStatus = $"扫描失败：{ex.Message}";
-        }
-        finally
-        {
-            IsScanning = false;
-            _scanCts?.Dispose();
-            _scanCts = null;
-        }
-    }
-
-    private bool CanCancelScan() => IsScanning;
-
-    [RelayCommand(CanExecute = nameof(CanCancelScan))]
-    private void CancelScan() => _scanCts?.Cancel();
-
-    /// <summary>把勾选的可读地址加入点位表</summary>
-    [RelayCommand]
-    private void AddSelectedScanResults()
-    {
-        var selected = ScanResults.Where(r => r.IsSelected && r.IsReadable).ToList();
-        if (selected.Count == 0)
-        {
-            TagStatus = "没有勾选可读的地址";
-            return;
-        }
-
-        int added = 0;
-        foreach (var item in selected.Where(item => TagConfigs.All(t => t.Address != item.Address)))
-        {
-            TagConfigs.Add(new PlcTag(item.Address, $"点位{item.Address}", string.Empty, 1, 0, $"点位{item.Address}"));
-            added++;
-        }
-
-        ApplyTagChanges();
-        TagStatus = $"已加入 {added} 个点位，跳过重复 {selected.Count - added} 个。记得按需改名称与 Scale。";
-    }
-
-    [RelayCommand]
-    private void SelectAllReadable()
-    {
-        foreach (var result in ScanResults)
-        {
-            result.IsSelected = result.IsReadable;
-        }
-    }
-
-    /// <summary>批量移除点位：参数是 DataGrid 当前选中的行（支持框选 / Ctrl / Shift 多选）</summary>
-    [RelayCommand]
-    private void RemoveSelectedTag(IList? selectedRows)
-    {
-        // SelectedItems 是随界面选择实时变化的活集合，先快照再删，避免边遍历边被改
-        var targets = selectedRows?.OfType<PlcTag>().ToList() ?? [];
-        if (targets.Count == 0)
-        {
-            TagStatus = "没有选中点位";
-            return;
-        }
-
-        foreach (var tag in targets)
-        {
-            TagConfigs.Remove(tag);
-        }
-
-        ApplyTagChanges();
-        TagStatus = targets.Count == 1
-            ? $"已删除点位「{targets[0].Name}」"
-            : $"已删除 {targets.Count} 个点位";
-    }
-
-    [RelayCommand]
-    private void SaveConfig()
-    {
-        try
-        {
-            CommitStorageMapping();
-            TagStatus = $"配置已保存：{ConfigStore.FilePath}";
-        }
-        catch (Exception ex)
-        {
-            TagStatus = $"保存失败：{ex.Message}";
-        }
-    }
-
-    /// <summary>点位变了：重建卡片曲线、存盘，采集中则重启采集让新点位生效</summary>
-    private void ApplyTagChanges()
-    {
-        RebuildTags();
-        SaveConfig();
-
-        if (IsAcquiring)
-        {
-            _ = RestartAcquisitionAsync();
-        }
-    }
-
     private async Task RestartAcquisitionAsync()
     {
         await StopAcquisitionAsync();
         StartAcquisition();
     }
 
-    private void RebuildTags()
-    {
-        Tags.Clear();
-        for (int i = 0; i < TagConfigs.Count; i++)
-        {
-            Tags.Add(new TagViewModel(TagConfigs[i], Palette[i % Palette.Length]));
-        }
-    }
-
-    /// <summary>
-    /// 兼容修复：早期版本改「名称」不会同步「宽表列名」，配置里会留下「名称=热封数量、列名=点位22」这种不一致。
-    /// 列名若仍是扫描加入时的默认占位名（点位N），就按名称纠正过来；手工改过的列名不动。
-    /// </summary>
-    private static void ReconcileDefaultColumnNames(IEnumerable<PlcTag> tags)
-    {
-        foreach (var tag in tags)
-        {
-            if (tag.ColumnName == $"点位{tag.Address}" && tag.Name != tag.ColumnName)
-            {
-                tag.ColumnName = tag.Name;
-            }
-        }
-    }
-
-    /// <summary>
-    /// 点位表或任一点位的属性（名称/列名/换算）变了，建表语句预览都要跟着刷新，
-    /// 否则会出现“界面里改了名称，预览和建表还是旧列名”的错觉。
-    /// </summary>
-    private void AttachTagSubscriptions()
-    {
-        TagConfigs.CollectionChanged += OnTagConfigsChanged;
-        foreach (var tag in TagConfigs)
-        {
-            tag.PropertyChanged += OnTagPropertyChanged;
-        }
-    }
-
-    private void OnTagConfigsChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        if (e.OldItems is not null)
-        {
-            foreach (PlcTag tag in e.OldItems)
-            {
-                tag.PropertyChanged -= OnTagPropertyChanged;
-            }
-        }
-
-        if (e.NewItems is not null)
-        {
-            foreach (PlcTag tag in e.NewItems)
-            {
-                tag.PropertyChanged += OnTagPropertyChanged;
-            }
-        }
-
-        RefreshTagGroups();
-        UpdateScriptPreview();
-    }
-
-    /// <summary>点位属性变了：地址会改变归组，名称/列名/换算会改变建表预览，都刷新一遍</summary>
-    private void OnTagPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        RefreshTagGroups();
-        UpdateScriptPreview();
-    }
-
-    /// <summary>支持输入 40001 这样的人读地址，自动换算成 0-based 协议地址</summary>
-    private static bool TryParseAddress(string? text, out ushort address)
-    {
-        address = 0;
-        if (!int.TryParse(text?.Trim(), out int value) || value < 0 || value > 40001 + 65535)
-        {
-            return false;
-        }
-
-        if (value >= 40001)
-        {
-            value -= 40001;
-        }
-
-        if (value > 65535)
-        {
-            return false;
-        }
-
-        address = (ushort)value;
-        return true;
-    }
-
-    // ---------------- 存储映射 ----------------
-
-    /// <summary>组表草稿变了：补/退订阅，并刷新组名清单、点位归组与建表预览</summary>
-    private void OnGroupsChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        if (e.OldItems is not null)
-        {
-            foreach (StorageGroup group in e.OldItems)
-            {
-                group.PropertyChanged -= OnGroupPropertyChanged;
-            }
-        }
-
-        if (e.NewItems is not null)
-        {
-            foreach (StorageGroup group in e.NewItems)
-            {
-                group.PropertyChanged += OnGroupPropertyChanged;
-            }
-        }
-
-        RefreshGroupNames();
-        RefreshTagGroups();
-        UpdateScriptPreview();
-    }
-
-    /// <summary>组的区段/组名/表名任一改动，点位的归组和建表预览都要跟着变</summary>
-    private void OnGroupPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        RefreshGroupNames();
-        RefreshTagGroups();
-        UpdateScriptPreview();
-    }
-
-    /// <summary>
-    /// 重新推导每个点位归到哪个组：地址落在哪个区段就归哪个组。
-    /// 区段是唯一判定依据，所以不存在「点位指向一个不存在的组」这种事。
-    /// </summary>
-    private void RefreshTagGroups()
-    {
-        // 改 Group 会反过来触发 OnTagPropertyChanged，这里挡一下重入
-        if (_refreshingTagGroups)
-        {
-            return;
-        }
-
-        _refreshingTagGroups = true;
-        try
-        {
-            foreach (var tag in TagConfigs)
-            {
-                tag.Group = ResolveGroupName(tag.Address);
-            }
-        }
-        finally
-        {
-            _refreshingTagGroups = false;
-        }
-    }
-
-    private bool _refreshingTagGroups;
-
-    /// <summary>地址落在哪个区段；不在任何区段内返回空 —— 这种点位既不会采集也不会落库</summary>
-    private string ResolveGroupName(ushort address)
-    {
-        foreach (var group in Groups)
-        {
-            if (group.Covers(address))
-            {
-                return group.Name;
-            }
-        }
-
-        return string.Empty;
-    }
-
-    private void RefreshGroupNames()
-    {
-        GroupNames.Clear();
-        foreach (var group in Groups)
-        {
-            GroupNames.Add(group.Name);
-        }
-    }
-
-    /// <summary>交给采集循环的读取区段：只取真有点位的组，空区段读回来也没地方写</summary>
-    private IReadOnlyList<ReadRange> BuildReadRanges() =>
-        [.. _config.Groups
-            .Where(g => g.Count > 0 && TagConfigs.Any(t => g.Covers(t.Address)))
-            .OrderBy(g => g.StartAddress)
-            .Select(g => new ReadRange(g.StartAddress, g.Count))];
-
-    /// <summary>落在某个区段内的点位（区段是唯一的判定依据，不看点位上的归组缓存）</summary>
-    private List<PlcTag> TagsOfGroup(StorageGroup group) =>
-        [.. TagConfigs.Where(t => group.Covers(t.Address))];
-
-    /// <summary>不在任何区段内的点位数：这些点位不会被采集、也不会落库</summary>
-    private int CountUnassignedTags() => TagConfigs.Count(t => ResolveGroupName(t.Address).Length == 0);
-
-    [RelayCommand]
-    private void AddGroup()
-    {
-        int index = Groups.Count + 1;
-        while (Groups.Any(g => string.Equals(g.Name, $"组{index}", StringComparison.OrdinalIgnoreCase)))
-        {
-            index++;
-        }
-
-        // 新区段接在所有现有区段之后，默认 20 个寄存器（现场常见的一档）
-        int start = Groups.Count == 0 ? 0 : Groups.Max(g => g.EndAddress) + 1;
-        Groups.Add(new StorageGroup($"组{index}", $"PlcData{index}", StorageMode.Long, (ushort)start, 20));
-        SelectedGroup = Groups[^1];
-        StorageStatus = $"已新增组「组{index}」，区段 {Groups[^1].DisplayRange}：接着设目标表，并把区段改成本台设备实际的地址段";
-    }
-
-    [RelayCommand]
-    private void RemoveGroup()
-    {
-        if (SelectedGroup is null)
-        {
-            StorageStatus = "先选中要删除的组";
-            return;
-        }
-
-        if (Groups.Count <= 1)
-        {
-            StorageStatus = "至少要保留一个存储组";
-            return;
-        }
-
-        var removedName = SelectedGroup.Name;
-        int affected = TagsOfGroup(SelectedGroup).Count;
-        Groups.Remove(SelectedGroup);
-        SelectedGroup = Groups[0];
-
-        StorageStatus = affected > 0
-            ? $"已删除组「{removedName}」：原区段内的 {affected} 个点位现在显示为「未归组」，改成别的组的区段覆盖它们即可"
-            : $"已删除组「{removedName}」";
-    }
-
-    /// <summary>
-    /// 校验组表草稿：组名唯一非空、表名合法、一张表只归一个组、宽表别超列数上限。
-    /// 顺手把两端的空格去掉，后面就不用到处 Trim。
-    /// </summary>
-    private void ValidateGroups()
-    {
-        if (Groups.Count == 0)
-        {
-            throw new InvalidOperationException("至少要有一个存储组。");
-        }
-
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var tableOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var group in Groups)
-        {
-            group.Name = group.Name?.Trim() ?? string.Empty;
-            group.TableName = group.TableName?.Trim() ?? string.Empty;
-
-            if (group.Name.Length == 0)
-            {
-                throw new InvalidOperationException("组名不能为空。");
-            }
-
-            if (!names.Add(group.Name))
-            {
-                throw new InvalidOperationException($"组名「{group.Name}」重复：组名是区段的标识，必须唯一。");
-            }
-
-            if (group.Count == 0)
-            {
-                throw new InvalidOperationException($"组「{group.Name}」的区段长度是 0，至少要有 1 个寄存器。");
-            }
-
-            if (group.EndAddress > 65535)
-            {
-                throw new InvalidOperationException(
-                    $"组「{group.Name}」的区段超出地址范围：起始 {group.StartAddress} + {group.Count} 个，" +
-                    $"结束地址 {group.EndAddress} 超过 65535。");
-            }
-
-            DynamicTableStore.EnsureValidIdentifier(group.TableName, "表名");
-
-            // 两个组写同一张表，列和点位会互相打架（宽表尤其明显），直接拦下
-            if (tableOwners.TryGetValue(group.TableName, out var owner))
-            {
-                throw new InvalidOperationException($"表「{group.TableName}」同时被组「{owner}」和「{group.Name}」使用，请分开。");
-            }
-
-            tableOwners[group.TableName] = group.Name;
-
-            int tagCount = TagsOfGroup(group).Count;
-            if (group.Mode == StorageMode.Wide && tagCount > DynamicTableStore.MaxPointColumnsInWideTable)
-            {
-                throw new InvalidOperationException(
-                    $"组「{group.Name}」是宽表但有 {tagCount} 个点位，超过单表列数上限" +
-                    $"（{DynamicTableStore.MaxPointColumnsInWideTable} 个），请拆成多个组或改用长表。");
-            }
-        }
-
-        // 区段重叠会让同一个地址同时属于两个组：采集读两遍、落库写两张表，直接拦下
-        for (int i = 0; i < Groups.Count; i++)
-        {
-            for (int j = i + 1; j < Groups.Count; j++)
-            {
-                if (Groups[i].StartAddress <= Groups[j].EndAddress && Groups[j].StartAddress <= Groups[i].EndAddress)
-                {
-                    throw new InvalidOperationException(
-                        $"组「{Groups[i].Name}」（{Groups[i].DisplayRange}）和组「{Groups[j].Name}」" +
-                        $"（{Groups[j].DisplayRange}）的区段重叠了，同一个地址不能属于两个组。");
-                }
-            }
-        }
-    }
-
-    /// <summary>把界面上的组表草稿提交成生效配置并落盘</summary>
-    private void CommitStorageMapping()
-    {
-        _config.Groups.Clear();
-        foreach (var group in Groups)
-        {
-            _config.Groups.Add(group.Clone());
-        }
-
-        UpdateEffectiveStorageText();
-        ConfigStore.Save(_config);
-    }
-
-    private void UpdateEffectiveStorageText()
-    {
-        EffectiveStorageText = _config.Groups.Count == 0
-            ? "当前没有存储组"
-            : "当前写入：" + string.Join("　|　", _config.Groups.Select(g =>
-                $"{g.Name} {g.DisplayRange} → {g.TableName}（{(g.Mode == StorageMode.Wide ? "宽表" : "长表")}）"));
-    }
-
-    /// <summary>建表语句预览：每个组一段，段首标出组名与点位数量</summary>
-    private void UpdateScriptPreview()
-    {
-        try
-        {
-            var blocks = new List<string>();
-            foreach (var group in Groups)
-            {
-                var tags = TagsOfGroup(group);
-                blocks.Add($"-- 组「{group.Name}」→ 表 {group.TableName}（{tags.Count} 个点位）\r\n" +
-                           DynamicTableStore.BuildCreateScript(group.TableName, group.Mode, tags));
-            }
-
-            CreateScriptPreview = blocks.Count > 0 ? string.Join("\r\n\r\n", blocks) : "（还没有存储组）";
-        }
-        catch (Exception ex)
-        {
-            CreateScriptPreview = $"（暂时无法生成建表语句：{ex.Message}）";
-        }
-    }
-
-    [RelayCommand]
-    private async Task RefreshTablesAsync()
-    {
-        try
-        {
-            var tables = await _tableStore.ListTablesAsync();
-            Tables.Clear();
-            foreach (var table in tables)
-            {
-                Tables.Add(table);
-            }
-        }
-        catch (Exception ex)
-        {
-            StorageStatus = $"读取表清单失败：{ex.Message}";
-        }
-    }
-
-    /// <summary>按组建表（已存在则补列）：先校验，全部建完才把组表提交生效</summary>
-    [RelayCommand]
-    private async Task CreateTableAsync()
-    {
-        try
-        {
-            StorageStatus = "处理中…";
-            ValidateGroups();
-
-            var notes = new List<string>();
-            foreach (var group in Groups)
-            {
-                var tags = TagsOfGroup(group);
-                bool created = await _tableStore.CreateTableIfMissingAsync(group.TableName, group.Mode, tags);
-                var sync = group.Mode == StorageMode.Wide
-                    ? await _tableStore.EnsureWideColumnsAsync(group.TableName, tags)
-                    : new DynamicTableStore.WideColumnSyncResult([], [], []);
-
-                notes.Add(DescribeGroupSync(group, tags.Count, created, sync));
-            }
-
-            CommitStorageMapping();
-            _ = RefreshTablesAsync();
-
-            StorageStatus = string.Join("；", notes);
-            await RefreshRecordsAsync();
-        }
-        catch (Exception ex)
-        {
-            StorageStatus = $"建表失败：{ex.Message}";
-        }
-    }
-
-    /// <summary>把一个组的建表结果压成一句话</summary>
-    private static string DescribeGroupSync(
-        StorageGroup group, int tagCount, bool created, DynamicTableStore.WideColumnSyncResult sync)
-    {
-        var note = new StringBuilder($"组「{group.Name}」");
-        note.Append(created ? $"已创建表 {group.TableName}" : $"表 {group.TableName} 已存在，结构已校验");
-        note.Append($"（{tagCount} 个点位）");
-
-        if (sync.Added.Count > 0)
-        {
-            note.Append($"，补齐列：{string.Join("、", sync.Added)}");
-        }
-
-        if (sync.Relaxed.Count > 0)
-        {
-            note.Append($"，改为可空（允许个别点位读失败）：{string.Join("、", sync.Relaxed)}");
-        }
-
-        if (sync.BlockingNotNull.Count > 0)
-        {
-            note.Append($"；⚠ 表里这些非空列没人写，插入会失败，建议换新表名或把它们改成可空 / 删掉：" +
-                        string.Join("、", sync.BlockingNotNull));
-        }
-
-        return note.ToString();
-    }
-
-    // ---------------- 触发记录（握手模拟上升沿） ----------------
+    // ---------------- 触发记录（握手模拟上升沿）：监听生命周期 ----------------
 
     private void StartTriggerWatch()
     {
-        if (_modbus is null || _triggerWatch is not null || !Triggers.Any(t => t.Enabled))
+        if (_modbus is null || _triggerWatch is not null || !_config.Triggers.Any(t => t.Enabled))
         {
-            TriggerStatus = Triggers.Count == 0 ? "没有触发规则" : "触发规则全部停用";
+            Trigger.OnWatchSkipped();
             return;
         }
 
-        _triggerWatch = new TriggerWatchService(_modbus, [.. Triggers])
+        _triggerWatch = new TriggerWatchService(_modbus, [.. _config.Triggers])
         {
-            PollIntervalMs = TriggerPollIntervalMs
+            PollIntervalMs = Trigger.TriggerPollIntervalMs
         };
-        _triggerWatch.Triggered += OnTriggered;
-        _triggerWatch.HandshakeCompleted += OnHandshakeCompleted;
-        _triggerWatch.Alarm += OnTriggerAlarm;
+        _triggerWatch.Triggered += Trigger.OnTriggered;
+        _triggerWatch.HandshakeCompleted += Trigger.OnHandshakeCompleted;
+        _triggerWatch.Alarm += Trigger.OnAlarm;
         _triggerWatch.Failed += OnAcquisitionFailed;
         _triggerWatch.Start();
 
-        TriggerStatus = $"监听中：{Triggers.Count(t => t.Enabled)} 条规则 · {TriggerPollIntervalMs} ms 轮询";
+        Trigger.OnWatchStarted();
         _ = EnsureTriggerTableAsync();
     }
 
@@ -1132,20 +878,18 @@ public partial class MainViewModel : ObservableObject
         }
 
         _triggerWatch = null;
-        service.Triggered -= OnTriggered;
-        service.HandshakeCompleted -= OnHandshakeCompleted;
-        service.Alarm -= OnTriggerAlarm;
+        service.Triggered -= Trigger.OnTriggered;
+        service.HandshakeCompleted -= Trigger.OnHandshakeCompleted;
+        service.Alarm -= Trigger.OnAlarm;
         service.Failed -= OnAcquisitionFailed;
         await service.StopAsync();
         service.Dispose();
 
-        _stuckRules.Clear();
-        TriggerAlarm = string.Empty;
-        TriggerStatus = "未监听";
+        Trigger.OnWatchStopped();
     }
 
     /// <summary>规则增删后要重启监听：监听循环用的是启动那一刻的规则快照</summary>
-    private async Task RestartTriggerWatchAsync()
+    public async Task RestartTriggerWatchAsync()
     {
         if (_triggerWatch is null)
         {
@@ -1160,175 +904,23 @@ public partial class MainViewModel : ObservableObject
     {
         try
         {
-            await _triggerStore.EnsureTableAsync(TriggerLogStore.DefaultTableName);
-            await RefreshTriggerRecordsAsync();
+            await _services.TriggerLogStore.EnsureTableAsync(TriggerLogStore.DefaultTableName);
+            await Trigger.RefreshTriggerRecordsAsync();
         }
         catch (Exception ex)
         {
-            _ = _dispatcher.BeginInvoke(() => TriggerAlarm = $"触发记录表准备失败：{ex.Message}");
+            _ = _dispatcher.BeginInvoke(() => Trigger.TriggerAlarm = $"触发记录表准备失败：{ex.Message}");
+            Log.Error(ex, "触发记录表准备失败：{Table}", TriggerLogStore.DefaultTableName);
         }
     }
 
-    /// <summary>该记一条记录了：先刷界面，落库丢到后台，别拖慢 100ms 的轮询</summary>
-    private void OnTriggered(TriggerRule rule, DateTime timestamp)
-    {
-        _dispatcher.BeginInvoke(() =>
-        {
-            TriggerCount++;
-            TriggerStatus = $"监听中：{Triggers.Count(t => t.Enabled)} 条规则 · 累计 {TriggerCount} 次 · " +
-                            $"最近「{rule.Name}」@ {timestamp:HH:mm:ss}";
-        });
-
-        _ = PersistTriggerAsync(rule, timestamp);
-    }
-
-    private async Task PersistTriggerAsync(TriggerRule rule, DateTime timestamp)
-    {
-        try
-        {
-            await _triggerStore.InsertAsync(TriggerLogStore.DefaultTableName, rule, timestamp);
-        }
-        catch (Exception ex)
-        {
-            _ = _dispatcher.BeginInvoke(() => TriggerAlarm = $"触发记录落库失败：{ex.Message}");
-        }
-    }
-
-    private void OnHandshakeCompleted(TriggerRule rule)
-    {
-        _dispatcher.BeginInvoke(() =>
-        {
-            _stuckRules.Remove(rule.Name);
-            UpdateTriggerAlarmText();
-        });
-    }
-
-    private void OnTriggerAlarm(TriggerRule rule, string message)
-    {
-        _dispatcher.BeginInvoke(() =>
-        {
-            _stuckRules.Add(rule.Name);
-            UpdateTriggerAlarmText();
-            TriggerStatus = message;      // 详细原因放状态栏，卡在哪条规则的「状态」列也能看到
-        });
-    }
-
-    /// <summary>报警条只列"哪几条规则卡住"，详细原因在状态栏与规则表的「状态」列</summary>
-    private void UpdateTriggerAlarmText()
-    {
-        TriggerAlarm = _stuckRules.Count == 0
-            ? string.Empty
-            : $"握手卡住：{string.Join("、", _stuckRules)} —— 等 PLC 清信号，未强行复位";
-    }
-
-    partial void OnTriggerPollIntervalMsChanged(int value)
-    {
-        if (_triggerWatch is not null)
-        {
-            _triggerWatch.PollIntervalMs = value;
-            TriggerStatus = $"监听中：轮询间隔已改为 {value} ms";
-        }
-    }
-
-    [RelayCommand]
-    private async Task AddTriggerRuleAsync()
-    {
-        int index = Triggers.Count + 1;
-        while (Triggers.Any(t => string.Equals(t.Name, $"触发{index}", StringComparison.OrdinalIgnoreCase)))
-        {
-            index++;
-        }
-
-        var rule = new TriggerRule($"触发{index}", 0, 0);
-        Triggers.Add(rule);
-        SelectedTrigger = rule;
-        ConfigStore.Save(_config);
-        await RestartTriggerWatchAsync();
-
-        TriggerStatus = $"已新增规则「{rule.Name}」：把信号/应答地址改成现场实际地址（0 基协议地址）";
-    }
-
-    [RelayCommand]
-    private async Task RemoveTriggerRuleAsync(IList? selectedRows)
-    {
-        // SelectedItems 是活集合，先快照再删
-        var targets = selectedRows?.OfType<TriggerRule>().ToList() ?? [];
-        if (targets.Count == 0)
-        {
-            TriggerStatus = "没有选中规则";
-            return;
-        }
-
-        foreach (var rule in targets)
-        {
-            Triggers.Remove(rule);
-        }
-
-        ConfigStore.Save(_config);
-        await RestartTriggerWatchAsync();
-        TriggerStatus = $"已删除 {targets.Count} 条触发规则";
-    }
-
-    [RelayCommand]
-    private void SaveTriggerRules()
-    {
-        try
-        {
-            ConfigStore.Save(_config);
-            TriggerStatus = $"触发规则已保存：{ConfigStore.FilePath}";
-        }
-        catch (Exception ex)
-        {
-            TriggerStatus = $"保存失败：{ex.Message}";
-        }
-    }
-
-    [RelayCommand]
-    private async Task RefreshTriggerRecordsAsync()
-    {
-        try
-        {
-            var data = await _triggerStore.QueryRecentAsync(TriggerLogStore.DefaultTableName, RecentRecordCount);
-            TriggerView = data.DefaultView;
-            TriggerRecordsInfo =
-                $"最近 {data.Rows.Count} 条 · 表 {TriggerLogStore.DefaultTableName} · 更新于 {DateTime.Now:HH:mm:ss}";
-        }
-        catch (Exception ex)
-        {
-            TriggerRecordsInfo = $"读取触发记录失败：{ex.Message}";
-        }
-    }
-
-    // ---------------- 记录查询 ----------------
-
-    [RelayCommand]
-    private async Task RefreshRecordsAsync()
-    {
-        // 预览选中的那个组；没选就预览第一个
-        var target = SelectedGroup ?? Groups.FirstOrDefault();
-        if (target is null)
-        {
-            RecentView = null;
-            RecordsInfo = "还没有存储组";
-            return;
-        }
-
-        try
-        {
-            var data = await _tableStore.QueryRecentAsync(target.TableName.Trim(), RecentRecordCount);
-            RecentView = data.DefaultView;
-            RecordsInfo = $"组「{target.Name}」· 表 {target.TableName} · 最近 {data.Rows.Count} 条 · 更新于 {DateTime.Now:HH:mm:ss}";
-        }
-        catch (Exception ex)
-        {
-            RecordsInfo = $"读取数据库失败：{ex.Message}";
-        }
-    }
+    // ---------------- 生命周期 ----------------
 
     public void Dispose()
     {
-        _recordTimer.Stop();
-        _scanCts?.Cancel();
+        Dashboard.Stop();
+        Trigger.Stop();
+        Scan.CancelIfScanning();
         _acquisition?.Dispose();
         _triggerWatch?.Dispose();
         _modbus?.Dispose();

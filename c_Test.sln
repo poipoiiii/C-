@@ -1,0 +1,40 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PlcCore", "PlcCore\PlcCore.csproj", "{C93E64A9-CF78-43F7-A595-D2D235F62317}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PlcHmi", "PlcHmi\PlcHmi.csproj", "{291B537E-0470-4708-83C1-3622607F4B5F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PlcSimulator", "PlcSimulator\PlcSimulator.csproj", "{BA199FD0-DD9B-421A-9D7E-2AC9F8C68E37}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PlcTests", "PlcTests\PlcTests.csproj", "{BE1C053C-095B-426A-BBD2-A77818CEB156}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C93E64A9-CF78-43F7-A595-D2D235F62317}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C93E64A9-CF78-43F7-A595-D2D235F62317}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C93E64A9-CF78-43F7-A595-D2D235F62317}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C93E64A9-CF78-43F7-A595-D2D235F62317}.Release|Any CPU.Build.0 = Release|Any CPU
+		{291B537E-0470-4708-83C1-3622607F4B5F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{291B537E-0470-4708-83C1-3622607F4B5F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{291B537E-0470-4708-83C1-3622607F4B5F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{291B537E-0470-4708-83C1-3622607F4B5F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BA199FD0-DD9B-421A-9D7E-2AC9F8C68E37}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BA199FD0-DD9B-421A-9D7E-2AC9F8C68E37}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BA199FD0-DD9B-421A-9D7E-2AC9F8C68E37}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BA199FD0-DD9B-421A-9D7E-2AC9F8C68E37}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BE1C053C-095B-426A-BBD2-A77818CEB156}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BE1C053C-095B-426A-BBD2-A77818CEB156}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BE1C053C-095B-426A-BBD2-A77818CEB156}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BE1C053C-095B-426A-BBD2-A77818CEB156}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

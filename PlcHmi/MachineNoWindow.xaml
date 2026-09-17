@@ -1,0 +1,37 @@
+<Window x:Class="PlcHmi.MachineNoWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="填写机台号" Height="220" Width="450"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        FontFamily="Microsoft YaHei UI" FontSize="13"
+        TextOptions.TextFormattingMode="Display"
+        Background="{DynamicResource RegionBrush}">
+    <!-- 进项目时问一次机台号：写触发记录、排查问题都要靠它认设备，别让它悄悄为空 -->
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal">
+            <Rectangle Width="3" Height="16" Fill="#409EFF"
+                       RadiusX="1.5" RadiusY="1.5" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBlock Text="机台号" Style="{StaticResource SectionTitle}" />
+            <TextBlock x:Name="ProfileHint" Style="{StaticResource SectionHint}" />
+        </StackPanel>
+
+        <TextBox Grid.Row="1" x:Name="MachineNoBox" Margin="0,14,0,0" Height="30"
+                 VerticalContentAlignment="Center" MaxLength="64" />
+
+        <TextBlock Grid.Row="2" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#909399" FontSize="12"
+                   Text="按 4 个字母 + 3 位数字填写（例如 AIXP999）：前 4 位决定机型，会自动切到对应机型的配置，写触发记录时也会带上。留空也行，之后在状态栏随时能改。" />
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="保存" Width="84" IsDefault="True" Click="Save_Click"
+                    Style="{StaticResource ButtonPrimary}" />
+            <Button Content="跳过" Width="84" Margin="8,0,0,0" IsCancel="True" />
+        </StackPanel>
+    </Grid>
+</Window>

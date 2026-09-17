@@ -1,0 +1,231 @@
+{
+  "ConfigVersion": 1,
+  "MachineName": "默认",
+  "Connection": {
+    "Ip": "127.0.0.1",
+    "Port": 5020,
+    "SlaveId": 1,
+    "IntervalMs": 1000
+  },
+  "Tags": [
+    {
+      "GroupText": "Test01",
+      "Address": 0,
+      "Name": "A",
+      "Unit": "℃",
+      "Scale": 0.1,
+      "Offset": 0,
+      "ColumnName": "A"
+    },
+    {
+      "GroupText": "Test01",
+      "Address": 1,
+      "Name": "a1",
+      "Unit": "kPa",
+      "Scale": 0.01,
+      "Offset": 0,
+      "ColumnName": "a1"
+    },
+    {
+      "GroupText": "Test01",
+      "Address": 2,
+      "Name": "a2",
+      "Unit": "件",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "a2"
+    },
+    {
+      "GroupText": "Test01",
+      "Address": 3,
+      "Name": "a3",
+      "Unit": "℃",
+      "Scale": 0.1,
+      "Offset": 0,
+      "ColumnName": "a3"
+    },
+    {
+      "GroupText": "Test02",
+      "Address": 7,
+      "Name": "b2",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "b2"
+    },
+    {
+      "GroupText": "Test02",
+      "Address": 8,
+      "Name": "b3",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "b3"
+    },
+    {
+      "GroupText": "Test03",
+      "Address": 9,
+      "Name": "C",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "C"
+    },
+    {
+      "GroupText": "未归组",
+      "Address": 4,
+      "Name": "a4",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "a4"
+    },
+    {
+      "GroupText": "Test02",
+      "Address": 5,
+      "Name": "B",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "B"
+    },
+    {
+      "GroupText": "Test02",
+      "Address": 6,
+      "Name": "b1",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "b1"
+    },
+    {
+      "GroupText": "Test03",
+      "Address": 10,
+      "Name": "c1",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "c1"
+    },
+    {
+      "GroupText": "Test03",
+      "Address": 11,
+      "Name": "c2",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "c2"
+    },
+    {
+      "GroupText": "未归组",
+      "Address": 12,
+      "Name": "c3",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "c3"
+    },
+    {
+      "GroupText": "未归组",
+      "Address": 13,
+      "Name": "点位13",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位13"
+    },
+    {
+      "GroupText": "未归组",
+      "Address": 14,
+      "Name": "点位14",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位14"
+    },
+    {
+      "GroupText": "未归组",
+      "Address": 15,
+      "Name": "点位15",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位15"
+    },
+    {
+      "GroupText": "未归组",
+      "Address": 16,
+      "Name": "点位16",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位16"
+    },
+    {
+      "GroupText": "未归组",
+      "Address": 17,
+      "Name": "点位17",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位17"
+    },
+    {
+      "GroupText": "未归组",
+      "Address": 18,
+      "Name": "点位18",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位18"
+    },
+    {
+      "GroupText": "未归组",
+      "Address": 19,
+      "Name": "点位19",
+      "Unit": "",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "点位19"
+    }
+  ],
+  "Groups": [
+    {
+      "Name": "Test01",
+      "TableName": "TestA",
+      "Mode": 1,
+      "StartAddress": 0,
+      "Count": 4,
+      "UseIdentityColumn": true,
+      "UseTimestampColumn": true
+    },
+    {
+      "Name": "Test02",
+      "TableName": "TestB",
+      "Mode": 1,
+      "StartAddress": 5,
+      "Count": 4,
+      "UseIdentityColumn": true,
+      "UseTimestampColumn": true
+    },
+    {
+      "Name": "Test03",
+      "TableName": "TestC",
+      "Mode": 1,
+      "StartAddress": 9,
+      "Count": 3,
+      "UseIdentityColumn": true,
+      "UseTimestampColumn": true
+    }
+  ],
+  "Triggers": [
+    {
+      "Name": "触发1",
+      "SignalAddress": 99,
+      "AckAddress": 100,
+      "Enabled": true,
+      "TimeoutMs": 5000
+    }
+  ],
+  "MachineNo": "AIXP999"
+}

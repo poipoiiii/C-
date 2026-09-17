@@ -55,6 +55,10 @@ public sealed class SlaveProbeService
                 var connect = client.ConnectAsync(ip, port);
                 if (!connect.Wait(timeoutMs))
                 {
+                    // 超时返回后这条连接还在建，紧接着 client 被 Dispose 会把它掐断（WSA_OPERATION_ABORTED）。
+                    // 必须把它的异常观察掉：否则会以"未观察的任务异常"冒到全局日志，
+                    // 探测一轮就刷一批 ERR，把真正要排查的东西埋掉。
+                    ObserveQuietly(connect);
                     return new SlaveProbeResult(unitId, false, "连接超时");
                 }
             }
@@ -89,4 +93,12 @@ public sealed class SlaveProbeService
             return new SlaveProbeResult(unitId, false, $"无响应：{ex.Message}");
         }
     }
+
+    /// <summary>把没人 await 的任务的异常吃掉（读一下 Exception 就算观察过），只为不污染日志</summary>
+    private static void ObserveQuietly(Task task) =>
+        _ = task.ContinueWith(
+            static t => _ = t.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 }

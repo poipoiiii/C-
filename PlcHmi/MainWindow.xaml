@@ -9,73 +9,7 @@
         TextOptions.TextFormattingMode="Display"
         Background="{DynamicResource RegionBrush}">
 
-    <Window.Resources>
-        <!-- 分区标题 / 说明 -->
-        <Style x:Key="SectionTitle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="14" />
-            <Setter Property="FontWeight" Value="Bold" />
-            <Setter Property="Foreground" Value="#303133" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-        </Style>
-        <Style x:Key="SectionHint" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="Foreground" Value="#909399" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-            <Setter Property="Margin" Value="10,0,0,0" />
-        </Style>
-        <Style x:Key="Divider" TargetType="Rectangle">
-            <Setter Property="Width" Value="1" />
-            <Setter Property="Height" Value="24" />
-            <Setter Property="Fill" Value="#EBEEF5" />
-            <Setter Property="Margin" Value="14,0" />
-        </Style>
-
-        <!-- 数据表统一样式：行高、斑马纹、横向细线 -->
-        <Style x:Key="FlatHeader" TargetType="DataGridColumnHeader"
-               BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
-            <Setter Property="HorizontalContentAlignment" Value="Center" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
-        <Style x:Key="FlatGrid" TargetType="DataGrid">
-            <Setter Property="AutoGenerateColumns" Value="False" />
-            <Setter Property="RowHeight" Value="34" />
-            <Setter Property="ColumnHeaderHeight" Value="36" />
-            <Setter Property="FontSize" Value="13" />
-            <Setter Property="Background" Value="White" />
-            <Setter Property="RowBackground" Value="White" />
-            <Setter Property="AlternatingRowBackground" Value="#FAFBFC" />
-            <Setter Property="BorderBrush" Value="#EBEEF5" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="GridLinesVisibility" Value="Horizontal" />
-            <Setter Property="HorizontalGridLinesBrush" Value="#F0F2F5" />
-            <Setter Property="HeadersVisibility" Value="Column" />
-            <Setter Property="CanUserAddRows" Value="False" />
-            <Setter Property="CanUserResizeRows" Value="False" />
-            <Setter Property="CanUserReorderColumns" Value="False" />
-            <Setter Property="SelectionUnit" Value="FullRow" />
-            <Setter Property="ColumnHeaderStyle" Value="{StaticResource FlatHeader}" />
-        </Style>
-        <!-- 单元格文本：左右各自留白，避免贴边 -->
-        <Style x:Key="CellText" TargetType="TextBlock">
-            <Setter Property="VerticalAlignment" Value="Center" />
-            <Setter Property="Margin" Value="10,0" />
-            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-        </Style>
-        <Style x:Key="CellNumber" TargetType="TextBlock" BasedOn="{StaticResource CellText}">
-            <Setter Property="HorizontalAlignment" Value="Right" />
-            <Setter Property="FontFamily" Value="Consolas" />
-        </Style>
-        <Style x:Key="CellMono" TargetType="TextBlock" BasedOn="{StaticResource CellText}">
-            <Setter Property="FontFamily" Value="Consolas" />
-        </Style>
-
-        <!-- 状态栏提示块 -->
-        <Style x:Key="StatusChip" TargetType="Border">
-            <Setter Property="CornerRadius" Value="3" />
-            <Setter Property="Padding" Value="10,5" />
-            <Setter Property="Margin" Value="8,0,0,0" />
-        </Style>
-    </Window.Resources>
+    <!-- 分区块、表格、状态块的样式统一放在 App.xaml：主窗口与「表记录历史」弹窗共用一套 -->
 
     <Grid Margin="14">
         <Grid.RowDefinitions>
@@ -84,36 +18,75 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- ==================== 连接 + 采集控制（各页共用） ==================== -->
+        <!-- ==================== 机型 + 连接 + 采集控制（各页共用） ==================== -->
         <hc:Card Grid.Row="0" Padding="14,12" Margin="0,0,0,12">
             <WrapPanel VerticalAlignment="Center">
-                <TextBlock Text="连接" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" />
-                <TextBox hc:InfoElement.Title="PLC IP" hc:InfoElement.TitlePlacement="Left" Width="180"
+                <!-- 首项用显式的「机型」标签，不再叫「连接」：右边那个开关才叫连接，否则容易被看成「连接 = 默认」。
+                     机型由机台号前 4 位决定（AIXP999 → AIXP），认不出时可在这里手工选；
+                     一个机型一份 data/configs/<机型>.json，首次运行从随包的 Templates/<机型>.json 复制 -->
+                <TextBlock Text="机型" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" />
+                <ComboBox x:Name="ProfileBox" Width="170" ItemsSource="{Binding Profiles}"
+                          SelectedItem="{Binding SelectedProfile}" DisplayMemberPath="Display" />
+                <TextBox hc:InfoElement.Title="PLC IP" hc:InfoElement.TitlePlacement="Left" Width="180" Margin="8,0,0,0"
                          Text="{Binding Ip, UpdateSourceTrigger=PropertyChanged}" />
                 <TextBox hc:InfoElement.Title="端口" hc:InfoElement.TitlePlacement="Left" Width="110" Margin="8,0,0,0"
                          Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" />
                 <ComboBox x:Name="SlaveIdBox" hc:InfoElement.Title="从站号" hc:InfoElement.TitlePlacement="Left" Width="130"
                           Margin="8,0,0,0" IsEditable="True" ItemsSource="{Binding SlaveIds}"
                           Text="{Binding SlaveIdText, UpdateSourceTrigger=LostFocus}"
-                          PreviewKeyDown="SlaveIdBox_PreviewKeyDown" />
+                          PreviewKeyDown="ComboBoxCommitOnEnter" />
                 <Button Content="探测从站" Command="{Binding ProbeSlavesCommand}" Width="88" Margin="8,0,0,0" />
                 <TextBlock Text="{Binding SlaveProbeStatus}" Style="{StaticResource SectionHint}" />
                 <TextBox hc:InfoElement.Title="采集周期(ms)" hc:InfoElement.TitlePlacement="Left" Width="150"
                          Margin="8,0,0,0" Text="{Binding IntervalMs, UpdateSourceTrigger=PropertyChanged}" />
 
                 <Rectangle Style="{StaticResource Divider}" />
-                <Button Content="连接" Command="{Binding ConnectCommand}" Style="{StaticResource ButtonPrimary}"
-                        Width="76" />
-                <Button Content="断开" Command="{Binding DisconnectCommand}" Width="76" Margin="8,0,0,0" />
+                <!-- 连接/断开 合成一个开关，开始/停止采集 合成一个开关；两个开关各管一件事，互不代劳。
+                     ToggleGesture 必须显式写成 LeftClick：ToggleBlock 靠内部的 MouseBinding 触发，默认手势是 None，不写就点不动。
+                     Padding/Height 也要自己给：ToggleBlock 默认没有内边距、高度就是内容高度 -->
+                <hc:ToggleBlock IsChecked="{Binding ConnectionSwitch}" Width="88" Height="32" Padding="14,0"
+                                VerticalAlignment="Center" ToggleGesture="LeftClick"
+                                CheckedContent="断开" UnCheckedContent="连接"
+                                ToolTip="连接 / 断开 PLC 链路">
+                    <hc:ToggleBlock.Style>
+                        <Style TargetType="hc:ToggleBlock" BasedOn="{StaticResource {x:Type hc:ToggleBlock}}">
+                            <Setter Property="Foreground" Value="White" />
+                            <Setter Property="Background" Value="#409EFF" />
+                            <Style.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter Property="Background" Value="#909399" />
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </hc:ToggleBlock.Style>
+                </hc:ToggleBlock>
+
+                <hc:ToggleBlock IsChecked="{Binding AcquisitionSwitch}" Width="104" Height="32" Padding="14,0"
+                                Margin="8,0,0,0" VerticalAlignment="Center" IsEnabled="{Binding IsConnected}"
+                                ToggleGesture="LeftClick"
+                                CheckedContent="停止采集" UnCheckedContent="开始采集"
+                                ToolTip="开始 / 停止采集（只停数据采集，连接保持不变）">
+                    <hc:ToggleBlock.Style>
+                        <Style TargetType="hc:ToggleBlock" BasedOn="{StaticResource {x:Type hc:ToggleBlock}}">
+                            <Setter Property="Foreground" Value="White" />
+                            <Setter Property="Background" Value="#67C23A" />
+                            <Style.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter Property="Background" Value="#E6A23C" />
+                                </Trigger>
+                                <!-- ToggleBlock 不是按钮，禁用时不会自己变灰，这里手动变淡，一眼看出是没连上 -->
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.5" />
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </hc:ToggleBlock.Style>
+                </hc:ToggleBlock>
 
                 <Rectangle Style="{StaticResource Divider}" />
-                <Button Content="开始采集" Command="{Binding StartCommand}" Style="{StaticResource ButtonSuccess}"
-                        Width="88" />
-                <Button Content="停止采集" Command="{Binding StopCommand}" Style="{StaticResource ButtonWarning}"
-                        Width="88" Margin="8,0,0,0" />
-
-                <Rectangle Style="{StaticResource Divider}" />
-                <hc:ToggleBlock IsChecked="{Binding PersistEnabled}" VerticalAlignment="Center"
+                <!-- Background=Transparent 是为了整块都能点：Border 背景为 null 时空白处不参与命中测试，只有文字能点 -->
+                <hc:ToggleBlock IsChecked="{Binding PersistEnabled}" Height="32" Padding="14,0"
+                                VerticalAlignment="Center" Background="Transparent" ToggleGesture="LeftClick"
                                 CheckedContent="写入数据库" UnCheckedContent="不落库" />
 
                 <Rectangle Style="{StaticResource Divider}" />
@@ -146,143 +119,138 @@
         <TabControl Grid.Row="1" FontSize="14">
 
             <!-- ==================== 实时看板 ==================== -->
-            <TabItem Header="实时看板">
-                <Grid Margin="10">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-
-                    <ScrollViewer x:Name="CardScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,0"
-                                  SizeChanged="CardScroll_SizeChanged">
-                        <ItemsControl ItemsSource="{Binding Tags}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <!-- 列数按卡片区实际宽度算出来，均分宽度才能真正排满整行 -->
-                                    <UniformGrid Columns="{Binding CardColumns,
-                                                RelativeSource={RelativeSource AncestorType=Window}}" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
+            <!-- 每个页签的 DataContext 指向自己的视图模型；外壳（连接/机型/状态栏）留在 Window.DataContext -->
+            <TabItem Header="实时看板" DataContext="{Binding Dashboard}">
+                <ScrollViewer x:Name="CardScroll" Margin="10" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,0"
+                              SizeChanged="CardScroll_SizeChanged">
+                    <StackPanel>
+                        <!-- 记录历史不再常驻页面：点卡片里的曲线，弹出这张表最近写进去的记录 -->
+                        <TextBlock Text="点卡片里的曲线，弹出这张表的历史记录" Style="{StaticResource SectionHint}"
+                                   Margin="0,0,0,8" />
+                        <ItemsControl ItemsSource="{Binding Groups}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <hc:Card Height="292" Margin="0,0,12,12" Padding="14" BorderThickness="1"
-                                             BorderBrush="#EBEEF5">
-                                        <Grid ClipToBounds="True">
-                                            <Grid.Style>
-                                                <Style TargetType="Grid">
-                                                    <!-- 离线卡片整体淡化，一眼看出哪台没数据 -->
-                                                    <Setter Property="Opacity" Value="0.45" />
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsOnline}" Value="True">
-                                                            <Setter Property="Opacity" Value="1" />
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Grid.Style>
-                                            <Grid.RowDefinitions>
-                                                <RowDefinition Height="Auto" />
-                                                <RowDefinition Height="Auto" />
-                                                <RowDefinition Height="*" />
-                                            </Grid.RowDefinitions>
+                                    <!-- 一个存储组一段：点组头可收起 / 展开，收起状态存在视图模型里 -->
+                                    <Expander IsExpanded="{Binding IsExpanded, Mode=TwoWay}" Margin="0,0,0,6">
+                                        <Expander.Header>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="Bold"
+                                                           Foreground="#303133" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding HeaderText}" Style="{StaticResource SectionHint}" />
+                                            </StackPanel>
+                                        </Expander.Header>
 
-                                            <Grid Grid.Row="0">
-                                                <StackPanel Orientation="Horizontal">
-                                                    <Ellipse Width="9" Height="9" VerticalAlignment="Center"
-                                                             Margin="0,0,8,0">
-                                                        <Ellipse.Style>
-                                                            <Style TargetType="Ellipse">
-                                                                <Setter Property="Fill" Value="#C0C4CC" />
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsOnline}" Value="True">
-                                                                        <Setter Property="Fill" Value="#67C23A" />
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Ellipse.Style>
-                                                    </Ellipse>
-                                                    <TextBlock Text="{Binding Tag.Name}" FontSize="15" FontWeight="Bold"
-                                                               Foreground="#303133" VerticalAlignment="Center" />
-                                                </StackPanel>
-                                                <TextBlock Text="{Binding Tag.DisplayAddress}" HorizontalAlignment="Right"
-                                                           VerticalAlignment="Center" FontSize="12" FontFamily="Consolas"
-                                                           Foreground="#A8ABB2" />
-                                            </Grid>
+                                        <ItemsControl ItemsSource="{Binding Tags}" Margin="0,8,0,0">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <!-- 列数按卡片区实际宽度算出来，均分宽度才能真正排满整行 -->
+                                                    <UniformGrid Columns="{Binding CardColumns,
+                                                                RelativeSource={RelativeSource AncestorType=Window}}" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <hc:Card Height="292" Margin="0,0,12,12" Padding="14" BorderThickness="1"
+                                                             BorderBrush="#EBEEF5">
+                                                        <Grid ClipToBounds="True">
+                                                            <Grid.Style>
+                                                                <Style TargetType="Grid">
+                                                                    <!-- 离线卡片整体淡化，一眼看出哪台没数据 -->
+                                                                    <Setter Property="Opacity" Value="0.45" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsOnline}" Value="True">
+                                                                            <Setter Property="Opacity" Value="1" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Grid.Style>
+                                                            <Grid.RowDefinitions>
+                                                                <RowDefinition Height="Auto" />
+                                                                <RowDefinition Height="Auto" />
+                                                                <RowDefinition Height="*" />
+                                                            </Grid.RowDefinitions>
 
-                                            <Grid Grid.Row="1" Margin="0,10,0,6">
-                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
-                                                    <TextBlock Text="{Binding ValueText}" FontSize="34" FontWeight="Bold"
-                                                               FontFamily="Consolas" Foreground="{Binding AccentBrush}" />
-                                                    <TextBlock Text="{Binding Tag.Unit}" FontSize="14" Margin="6,0,0,6"
-                                                               VerticalAlignment="Bottom" Foreground="#909399" />
-                                                </StackPanel>
-                                                <StackPanel HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                                            Margin="0,0,0,4">
-                                                    <TextBlock HorizontalAlignment="Right" FontSize="12">
-                                                        <Run Text="原始值 " Foreground="#A8ABB2" />
-                                                        <Run Text="{Binding RawText}" Foreground="#606266"
-                                                             FontWeight="SemiBold" />
-                                                    </TextBlock>
-                                                    <TextBlock Text="{Binding UpdatedAtText}" HorizontalAlignment="Right"
-                                                               FontSize="11" Foreground="#A8ABB2" />
-                                                    <TextBlock Text="{Binding FailureText}" HorizontalAlignment="Right"
-                                                               FontSize="11" Foreground="#F56C6C" MaxWidth="260"
-                                                               TextTrimming="CharacterEllipsis">
-                                                        <TextBlock.Style>
-                                                            <Style TargetType="TextBlock">
-                                                                <!-- 正常时没有失败原因，整行收起 -->
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding FailureText}" Value="">
-                                                                        <Setter Property="Visibility" Value="Collapsed" />
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </TextBlock.Style>
-                                                    </TextBlock>
-                                                </StackPanel>
-                                            </Grid>
+                                                            <Grid Grid.Row="0">
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <Ellipse Width="9" Height="9" VerticalAlignment="Center"
+                                                                             Margin="0,0,8,0">
+                                                                        <Ellipse.Style>
+                                                                            <Style TargetType="Ellipse">
+                                                                                <Setter Property="Fill" Value="#C0C4CC" />
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding IsOnline}" Value="True">
+                                                                                        <Setter Property="Fill" Value="#67C23A" />
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </Ellipse.Style>
+                                                                    </Ellipse>
+                                                                    <TextBlock Text="{Binding Tag.Name}" FontSize="15" FontWeight="Bold"
+                                                                               Foreground="#303133" VerticalAlignment="Center" />
+                                                                </StackPanel>
+                                                                <TextBlock Text="{Binding Tag.DisplayAddress}" HorizontalAlignment="Right"
+                                                                           VerticalAlignment="Center" FontSize="12" FontFamily="Consolas"
+                                                                           Foreground="#A8ABB2" />
+                                                            </Grid>
 
-                                            <lvc:CartesianChart Grid.Row="2"
-                                                                Series="{Binding Series}"
-                                                                XAxes="{Binding XAxes}"
-                                                                YAxes="{Binding YAxes}"
-                                                                LegendPosition="Hidden"
-                                                                TooltipPosition="Hidden" />
-                                        </Grid>
-                                    </hc:Card>
+                                                            <Grid Grid.Row="1" Margin="0,10,0,6">
+                                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+                                                                    <TextBlock Text="{Binding ValueText}" FontSize="34" FontWeight="Bold"
+                                                                               FontFamily="Consolas" Foreground="{Binding AccentBrush}" />
+                                                                    <TextBlock Text="{Binding Tag.Unit}" FontSize="14" Margin="6,0,0,6"
+                                                                               VerticalAlignment="Bottom" Foreground="#909399" />
+                                                                </StackPanel>
+                                                                <StackPanel HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                                            Margin="0,0,0,4">
+                                                                    <TextBlock HorizontalAlignment="Right" FontSize="12">
+                                                                        <Run Text="原始值 " Foreground="#A8ABB2" />
+                                                                        <Run Text="{Binding RawText}" Foreground="#606266"
+                                                                             FontWeight="SemiBold" />
+                                                                    </TextBlock>
+                                                                    <TextBlock Text="{Binding UpdatedAtText}" HorizontalAlignment="Right"
+                                                                               FontSize="11" Foreground="#A8ABB2" />
+                                                                    <TextBlock Text="{Binding FailureText}" HorizontalAlignment="Right"
+                                                                               FontSize="11" Foreground="#F56C6C" MaxWidth="260"
+                                                                               TextTrimming="CharacterEllipsis">
+                                                                        <TextBlock.Style>
+                                                                            <Style TargetType="TextBlock">
+                                                                                <!-- 正常时没有失败原因，整行收起 -->
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding FailureText}" Value="">
+                                                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </TextBlock.Style>
+                                                                    </TextBlock>
+                                                                </StackPanel>
+                                                            </Grid>
+
+                                                            <!-- 点曲线弹出这张表的历史记录；用 Preview 事件，免得被图表自己的鼠标处理吃掉 -->
+                                                            <lvc:CartesianChart Grid.Row="2"
+                                                                                ToolTip="点击查看这张表的历史记录"
+                                                                                PreviewMouseLeftButtonUp="Chart_Click"
+                                                                                Series="{Binding Series}"
+                                                                                XAxes="{Binding XAxes}"
+                                                                                YAxes="{Binding YAxes}"
+                                                                                LegendPosition="Hidden"
+                                                                                TooltipPosition="Hidden" />
+                                                        </Grid>
+                                                    </hc:Card>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Expander>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                    </ScrollViewer>
-
-                    <hc:Card Grid.Row="1" Padding="14" Margin="0,4,0,0">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
-
-                            <Grid Grid.Row="0" Margin="0,0,0,10">
-                                <StackPanel Orientation="Horizontal">
-                                    <Rectangle Width="3" Height="16" Fill="#409EFF"
-                                               RadiusX="1.5" RadiusY="1.5" VerticalAlignment="Center" Margin="0,0,8,0" />
-                                    <TextBlock Text="最近采集记录" Style="{StaticResource SectionTitle}" />
-                                    <TextBlock Text="{Binding RecordsInfo}" Style="{StaticResource SectionHint}" />
-                                </StackPanel>
-                                <Button Content="刷新" Command="{Binding RefreshRecordsCommand}"
-                                        HorizontalAlignment="Right" Width="76" />
-                            </Grid>
-
-                            <DataGrid Grid.Row="1" Height="210" ItemsSource="{Binding RecentView}"
-                                      AutoGenerateColumns="True" IsReadOnly="True"
-                                      Style="{StaticResource FlatGrid}" ColumnHeaderStyle="{StaticResource FlatHeader}" />
-                        </Grid>
-                    </hc:Card>
-                </Grid>
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
 
             <!-- ==================== 采集点位 ==================== -->
-            <TabItem Header="采集点位">
+            <TabItem Header="采集点位" DataContext="{Binding Scan}">
                 <Grid Margin="10">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -431,19 +399,21 @@
             </TabItem>
 
             <!-- ==================== 存储映射 ==================== -->
-            <TabItem Header="存储映射">
+            <TabItem Header="存储映射" DataContext="{Binding Storage}">
                 <Grid Margin="10">
+                    <!-- 组表与建表预览上下并列：默认 4:6，中间的分隔条可上下拖动调高 -->
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="4*" MinHeight="180" />
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
+                        <RowDefinition Height="6*" MinHeight="150" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <hc:Card Grid.Row="0" Padding="14,12" Margin="0,0,0,10">
+                    <hc:Card Grid.Row="0" Padding="14,12" Margin="0,0,0,3">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
 
                             <WrapPanel Grid.Row="0" VerticalAlignment="Center">
@@ -458,7 +428,7 @@
                                         Style="{StaticResource ButtonPrimary}" Width="130" Margin="8,0,0,0" />
                             </WrapPanel>
 
-                            <DataGrid Grid.Row="1" x:Name="GroupGrid" Height="170" Margin="0,10,0,0"
+                            <DataGrid Grid.Row="1" x:Name="GroupGrid" Margin="0,10,0,0"
                                       ItemsSource="{Binding Groups}" SelectedItem="{Binding SelectedGroup}"
                                       Style="{StaticResource FlatGrid}">
                                 <DataGrid.Columns>
@@ -468,14 +438,19 @@
                                                         ElementStyle="{StaticResource CellNumber}" />
                                     <DataGridTextColumn Header="寄存器数" Width="110" Binding="{Binding Count}"
                                                         ElementStyle="{StaticResource CellNumber}" />
-                                    <DataGridTextColumn Header="区段（人读）" Width="180" IsReadOnly="True"
+                                    <DataGridTextColumn Header="区段（人读）" Width="170" IsReadOnly="True"
                                                         Binding="{Binding DisplayRange}"
                                                         ElementStyle="{StaticResource CellMono}" />
-                                    <DataGridTemplateColumn Header="目标表" Width="220">
+                                    <!-- 附加列：这两列加不加由现场定，勾掉后建表与插入都不会带上它们 -->
+                                    <DataGridCheckBoxColumn Header="Id列" Width="56"
+                                                            Binding="{Binding UseIdentityColumn, UpdateSourceTrigger=PropertyChanged}" />
+                                    <DataGridCheckBoxColumn Header="时间戳列" Width="70"
+                                                            Binding="{Binding UseTimestampColumn, UpdateSourceTrigger=PropertyChanged}" />
+                                    <DataGridTemplateColumn Header="目标表" Width="200">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <ComboBox Margin="0,2" IsEditable="True"
-                                                          ItemsSource="{Binding DataContext.Tables, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                          ItemsSource="{Binding DataContext.Tables, RelativeSource={RelativeSource AncestorType=DataGrid}}"
                                                           Text="{Binding TableName, UpdateSourceTrigger=PropertyChanged}" />
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
@@ -484,7 +459,7 @@
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <ComboBox Margin="0,2"
-                                                          ItemsSource="{Binding DataContext.ModeOptions, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                          ItemsSource="{Binding DataContext.ModeOptions, RelativeSource={RelativeSource AncestorType=DataGrid}}"
                                                           DisplayMemberPath="Display" SelectedValuePath="Mode"
                                                           SelectedValue="{Binding Mode}" />
                                             </DataTemplate>
@@ -495,7 +470,13 @@
                         </Grid>
                     </hc:Card>
 
-                    <hc:Card Grid.Row="1" Padding="14">
+                    <!-- 拖动分隔条调整「存储组」与「建表语句预览」的高度（4* / 6* 只是初始比例） -->
+                    <GridSplitter Grid.Row="1" Height="6" Margin="0,0,0,3"
+                                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                  ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"
+                                  Background="#EBEEF5" />
+
+                    <hc:Card Grid.Row="2" Padding="14">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -507,13 +488,17 @@
                                     <Rectangle Width="3" Height="16" Fill="#409EFF"
                                                RadiusX="1.5" RadiusY="1.5" VerticalAlignment="Center" Margin="0,0,8,0" />
                                     <TextBlock Text="建表语句预览" Style="{StaticResource SectionTitle}" />
-                                    <TextBlock Text="{Binding EffectiveStorageText}" Style="{StaticResource SectionHint}"
-                                               Foreground="#409EFF" FontWeight="Bold" />
-                                    <TextBlock Text="{Binding StorageStatus}" Style="{StaticResource SectionHint}"
-                                               Foreground="#E6A23C" />
                                 </StackPanel>
+
+                                <!-- 当前写入 / 最近一次建表结果都是长句子，各占一行换行显示：
+                                     挤在标题右边会横向溢出，右边那截根本看不全 -->
+                                <TextBlock Margin="11,6,0,0" TextWrapping="Wrap" FontSize="12" FontWeight="Bold"
+                                           Foreground="#409EFF" Text="{Binding EffectiveStorageText}" />
+                                <TextBlock Margin="11,4,0,0" TextWrapping="Wrap" FontSize="12"
+                                           Foreground="#E6A23C" Text="{Binding StorageStatus}" />
+
                                 <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#909399" FontSize="12"
-                                           Text="每个组一张表，点位按自己的「存储组」落到对应表。表名与列名会先过标识符白名单（中英文/数字/下划线，不能数字开头），再用 [ ] 包裹执行，避免 SQL 注入。表不存在按下面语句创建；宽表已存在会自动补齐缺的列。组表是草稿，点【建表 / 校验结构】或【保存配置】才生效。" />
+                                           Text="每个组一张表，点位按自己的「存储组」落到对应表。Id 与时间戳属于「附加列」，按现场要求勾掉就不要（插入时也不会写它们，所以长表的寄存器列、宽表的点位列至少要留一样）。表名与列名会先过标识符白名单（中英文/数字/下划线，不能数字开头），再用 [ ] 包裹执行，避免 SQL 注入。表不存在按下面语句创建；宽表已存在会自动补齐缺的列。组表是草稿，点【建表 / 校验结构】或【保存配置】才生效。" />
                             </StackPanel>
                             <TextBox Grid.Row="2" Text="{Binding CreateScriptPreview, Mode=OneWay}" IsReadOnly="True"
                                      AcceptsReturn="True" FontFamily="Consolas" FontSize="13" TextWrapping="NoWrap"
@@ -522,11 +507,11 @@
                         </Grid>
                     </hc:Card>
 
-                    <TextBlock Grid.Row="2" Text="{Binding RecordsInfo}" Foreground="#909399" Margin="4,10,0,0" />
+                    <TextBlock Grid.Row="3" Text="{Binding Dashboard.RecordsInfo}" Foreground="#909399" Margin="4,10,0,0" />
                 </Grid>
             </TabItem>
             <!-- ==================== 触发记录 ==================== -->
-            <TabItem Header="触发记录">
+            <TabItem Header="触发记录" DataContext="{Binding Trigger}">
                 <Grid Margin="10">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -617,6 +602,42 @@
 
         <!-- ==================== 状态栏 ==================== -->
         <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,10,0,0">
+            <Border Background="#ECF5FF">
+                <Border.Style>
+                    <Style TargetType="Border" BasedOn="{StaticResource StatusChip}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ProfileStatus}" Value="">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <TextBlock Text="{Binding ProfileStatus}" Foreground="#409EFF" />
+            </Border>
+            <!-- 机台号：进项目时弹框问过一次，这里随时能改；失焦或回车才落盘。前 4 位决定机型 -->
+            <Border Background="#F4F4F5" CornerRadius="3" Padding="10,2">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="机台号" Foreground="#909399" VerticalAlignment="Center" />
+                    <TextBox Width="130" Margin="6,0,0,0" BorderThickness="0" Background="Transparent"
+                             VerticalContentAlignment="Center" MaxLength="64"
+                             ToolTip="4 个字母 + 3 位数字，例如 AIXP999；前 4 位决定机型"
+                             Text="{Binding MachineNo, UpdateSourceTrigger=LostFocus}"
+                             KeyDown="MachineNoCommitOnEnter" />
+                </StackPanel>
+            </Border>
+            <!-- 机台号认不出机型时提醒一句：现场允许手工选机型，所以标黄不标红 -->
+            <Border Background="#FDF6EC">
+                <Border.Style>
+                    <Style TargetType="Border" BasedOn="{StaticResource StatusChip}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding MachineNoHint}" Value="">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <TextBlock Text="{Binding MachineNoHint}" Foreground="#E6A23C" />
+            </Border>
             <Border Background="#F4F4F5" CornerRadius="3" Padding="10,5">
                 <TextBlock Text="{Binding StatusText}" Foreground="#606266" />
             </Border>

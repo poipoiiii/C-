@@ -2,7 +2,6 @@ using System.Data;
 using System.Data.Common;
 using System.Text;
 using System.Text.RegularExpressions;
-using Microsoft.EntityFrameworkCore;
 using PlcCore.Data;
 using PlcHmi.Models;
 
@@ -23,11 +22,15 @@ public sealed class DynamicTableStore
     private static readonly string[] LongColumns =
         ["Timestamp", "RegisterAddress", "RawValue", "EngineeringValue"];
 
-    /// <summary>
-    /// 宽表能放多少个点位列：SQL Server 单表列数上限 1024，扣掉 Id 和 Timestamp（长表切换过来时
-    /// 还会留着 RegisterAddress/RawValue/EngineeringValue，所以这里按更紧的算法给上限）。
-    /// </summary>
-    public const int MaxPointColumnsInWideTable = 1022;
+    /// <summary>SQL Server 单表列数上限</summary>
+    public const int MaxColumnsPerTable = 1024;
+
+    /// <summary>两个附加列都开时的点位数上限（<see cref="MaxPointColumns"/> 的最严情形）</summary>
+    public const int MaxPointColumnsInWideTable = MaxColumnsPerTable - 2;
+
+    /// <summary>宽表最多放多少个点位列：列数上限扣掉 Id / 时间戳这些非寄存器列</summary>
+    public static int MaxPointColumns(TableShape shape) =>
+        MaxColumnsPerTable - (shape.UseIdentityColumn ? 1 : 0) - (shape.UseTimestampColumn ? 1 : 0);
 
     public static void EnsureValidIdentifier(string name, string what)
     {
@@ -51,37 +54,55 @@ public sealed class DynamicTableStore
         }
     }
 
-    /// <summary>生成建表语句（同时用于界面预览）</summary>
-    public static string BuildCreateScript(string table, StorageMode mode, IReadOnlyList<PlcTag> tags)
+    /// <summary>
+    /// 生成建表语句（同时用于界面预览）。
+    /// Id / 时间戳这两列算"附加列"，加不加由 <see cref="TableShape"/> 决定 ——
+    /// 关掉之后插入语句也不会写它们，所以三种列（Id / 时间戳 / 点位列）至少要剩一样。
+    /// </summary>
+    public static string BuildCreateScript(
+        string table, StorageMode mode, IReadOnlyList<PlcTag> tags, TableShape? shape = null)
     {
         EnsureValidIdentifier(table, "表名");
-        var builder = new StringBuilder();
-        builder.Append($"CREATE TABLE {Quote(table)} (\r\n    [Id] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,\r\n    [Timestamp] DATETIME2 NOT NULL");
+        var layout = shape ?? TableShape.Default;
+
+        var columns = new List<string>();
+
+        if (layout.UseIdentityColumn)
+        {
+            columns.Add("[Id] INT IDENTITY(1,1) NOT NULL PRIMARY KEY");
+        }
+
+        if (layout.UseTimestampColumn)
+        {
+            columns.Add("[Timestamp] DATETIME2 NOT NULL");
+        }
 
         if (mode == StorageMode.Long)
         {
-            builder.Append(",\r\n    [RegisterAddress] INT NOT NULL")
-                   .Append(",\r\n    [RawValue] SMALLINT NOT NULL")
-                   .Append(",\r\n    [EngineeringValue] FLOAT NOT NULL");
-
-            return builder.Append("\r\n);").ToString();
+            columns.Add("[RegisterAddress] INT NOT NULL");
+            columns.Add("[RawValue] SMALLINT NOT NULL");
+            columns.Add("[EngineeringValue] FLOAT NOT NULL");
         }
-
-        EnsureColumnsUsable(tags);
-        foreach (var tag in tags)
+        else
         {
+            EnsureColumnsUsable(tags);
+
             // 用可空列：某点位本次没读到（地址不存在等）时该列写 NULL，不阻断整行插入
-            builder.Append(",\r\n    ").Append(Quote(tag.ColumnName)).Append(" FLOAT NULL");
+            columns.AddRange(tags.Select(tag => $"{Quote(tag.ColumnName)} FLOAT NULL"));
         }
 
-        return builder.Append("\r\n);").ToString();
+        if (columns.Count == 0)
+        {
+            throw new ArgumentException("这张表一列都没有：Id、时间戳、寄存器列至少要保留一样。");
+        }
+
+        return $"CREATE TABLE {Quote(table)} (\r\n    {string.Join(",\r\n    ", columns)}\r\n);";
     }
 
     /// <summary>列出库里已有的用户表</summary>
     public async Task<IReadOnlyList<string>> ListTablesAsync()
     {
-        await using var db = new AppDbContext();
-        var connection = await OpenAsync(db);
+        await using var connection = await OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText =
             "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME";
@@ -100,8 +121,7 @@ public sealed class DynamicTableStore
     {
         EnsureValidIdentifier(table, "表名");
 
-        await using var db = new AppDbContext();
-        var connection = await OpenAsync(db);
+        await using var connection = await OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText =
             "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME = @name";
@@ -111,17 +131,17 @@ public sealed class DynamicTableStore
     }
 
     /// <summary>建表：已存在则不动，返回是否新建</summary>
-    public async Task<bool> CreateTableIfMissingAsync(string table, StorageMode mode, IReadOnlyList<PlcTag> tags)
+    public async Task<bool> CreateTableIfMissingAsync(
+        string table, StorageMode mode, IReadOnlyList<PlcTag> tags, TableShape? shape = null)
     {
         if (await TableExistsAsync(table))
         {
             return false;
         }
 
-        await using var db = new AppDbContext();
-        var connection = await OpenAsync(db);
+        await using var connection = await OpenAsync();
         await using var command = connection.CreateCommand();
-        command.CommandText = BuildCreateScript(table, mode, tags);
+        command.CommandText = BuildCreateScript(table, mode, tags, shape);
         await command.ExecuteNonQueryAsync();
         return true;
     }
@@ -139,13 +159,15 @@ public sealed class DynamicTableStore
     /// 宽表结构同步：补齐缺的点位列；把点位表里那些"非空"的列改成可空
     /// （某点位本次读失败时该列写 NULL，不该因此让整行插入失败）。
     /// </summary>
-    public async Task<WideColumnSyncResult> EnsureWideColumnsAsync(string table, IReadOnlyList<PlcTag> tags)
+    public async Task<WideColumnSyncResult> EnsureWideColumnsAsync(
+        string table, IReadOnlyList<PlcTag> tags, TableShape? shape = null)
     {
         EnsureValidIdentifier(table, "表名");
         EnsureColumnsUsable(tags);
 
-        await using var db = new AppDbContext();
-        var connection = await OpenAsync(db);
+        var layout = shape ?? TableShape.Default;
+
+        await using var connection = await OpenAsync();
 
         var existing = new Dictionary<string, (bool IsNullable, bool IsIdentity, string TypeName)>(StringComparer.OrdinalIgnoreCase);
         await using (var command = connection.CreateCommand())
@@ -189,10 +211,13 @@ public sealed class DynamicTableStore
 
         // 长表改建出来的表会留着 RegisterAddress/RawValue/EngineeringValue 这些非空列，
         // 切到宽表后插入不含它们，SQL Server 会直接报“不能将值 NULL 插入列”。这里提前点出来。
-        var written = new HashSet<string>(tags.Select(t => t.ColumnName), StringComparer.OrdinalIgnoreCase)
+        // 同理，时间戳列被关掉时，表里那个非空 [Timestamp] 也会被点出来 —— 那正是插入会失败的原因。
+        var written = new HashSet<string>(tags.Select(t => t.ColumnName), StringComparer.OrdinalIgnoreCase);
+        if (layout.UseTimestampColumn)
         {
-            "Timestamp"
-        };
+            written.Add("Timestamp");
+        }
+
         var blocking = existing
             .Where(pair => !pair.Value.IsNullable && !pair.Value.IsIdentity && !written.Contains(pair.Key))
             .Select(pair => pair.Key)
@@ -208,7 +233,7 @@ public sealed class DynamicTableStore
     private const int MaxRowsPerInsert = 200;
 
     /// <summary>长表写入：一行一个点位</summary>
-    public async Task InsertLongAsync(string table, IReadOnlyList<Sample> batch)
+    public async Task InsertLongAsync(string table, IReadOnlyList<Sample> batch, TableShape? shape = null)
     {
         EnsureValidIdentifier(table, "表名");
         if (batch.Count == 0)
@@ -216,8 +241,12 @@ public sealed class DynamicTableStore
             return;
         }
 
-        await using var db = new AppDbContext();
-        var connection = await OpenAsync(db);
+        var layout = shape ?? TableShape.Default;
+        var columnNames = layout.UseTimestampColumn
+            ? "[Timestamp],[RegisterAddress],[RawValue],[EngineeringValue]"
+            : "[RegisterAddress],[RawValue],[EngineeringValue]";
+
+        await using var connection = await OpenAsync();
 
         // 切段写但放在一个事务里：保持「一批要么全进、要么全不进」的语义，不留下半批数据
         await using var transaction = await connection.BeginTransactionAsync();
@@ -225,8 +254,7 @@ public sealed class DynamicTableStore
         for (int offset = 0; offset < batch.Count; offset += MaxRowsPerInsert)
         {
             int count = Math.Min(MaxRowsPerInsert, batch.Count - offset);
-            var sql = new StringBuilder(
-                $"INSERT INTO {Quote(table)} ([Timestamp],[RegisterAddress],[RawValue],[EngineeringValue]) VALUES ");
+            var sql = new StringBuilder($"INSERT INTO {Quote(table)} ({columnNames}) VALUES ");
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
 
@@ -238,8 +266,12 @@ public sealed class DynamicTableStore
                     sql.Append(',');
                 }
 
-                sql.Append($"(@t{i},@a{i},@r{i},@e{i})");
-                AddParameter(command, $"@t{i}", sample.Timestamp);
+                sql.Append(layout.UseTimestampColumn ? $"(@t{i},@a{i},@r{i},@e{i})" : $"(@a{i},@r{i},@e{i})");
+                if (layout.UseTimestampColumn)
+                {
+                    AddParameter(command, $"@t{i}", sample.Timestamp);
+                }
+
                 AddParameter(command, $"@a{i}", (int)sample.Tag.Address);
                 AddParameter(command, $"@r{i}", sample.RawValue);
                 AddParameter(command, $"@e{i}", sample.EngineeringValue);
@@ -253,7 +285,7 @@ public sealed class DynamicTableStore
     }
 
     /// <summary>宽表写入：一行一个时刻，点位成列</summary>
-    public async Task InsertWideAsync(string table, IReadOnlyList<Sample> batch)
+    public async Task InsertWideAsync(string table, IReadOnlyList<Sample> batch, TableShape? shape = null)
     {
         EnsureValidIdentifier(table, "表名");
         if (batch.Count == 0)
@@ -261,23 +293,31 @@ public sealed class DynamicTableStore
             return;
         }
 
-        var columns = new StringBuilder("[Timestamp]");
-        var values = new StringBuilder("@t");
-        await using var db = new AppDbContext();
-        var connection = await OpenAsync(db);
+        var layout = shape ?? TableShape.Default;
+        var columnNames = new List<string>();
+        var valueSlots = new List<string>();
+
+        await using var connection = await OpenAsync();
         await using var command = connection.CreateCommand();
 
-        AddParameter(command, "@t", batch[0].Timestamp);
+        if (layout.UseTimestampColumn)
+        {
+            columnNames.Add("[Timestamp]");
+            valueSlots.Add("@t");
+            AddParameter(command, "@t", batch[0].Timestamp);
+        }
+
         for (int i = 0; i < batch.Count; i++)
         {
             var sample = batch[i];
             EnsureValidIdentifier(sample.Tag.ColumnName, "列名");
-            columns.Append(',').Append(Quote(sample.Tag.ColumnName));
-            values.Append(",@v").Append(i);
+            columnNames.Add(Quote(sample.Tag.ColumnName));
+            valueSlots.Add($"@v{i}");
             AddParameter(command, $"@v{i}", sample.EngineeringValue);
         }
 
-        command.CommandText = $"INSERT INTO {Quote(table)} ({columns}) VALUES ({values})";
+        command.CommandText =
+            $"INSERT INTO {Quote(table)} ({string.Join(",", columnNames)}) VALUES ({string.Join(",", valueSlots)})";
         await command.ExecuteNonQueryAsync();
     }
 
@@ -286,31 +326,40 @@ public sealed class DynamicTableStore
     {
         EnsureValidIdentifier(table, "表名");
 
-        await using var db = new AppDbContext();
-        var connection = await OpenAsync(db);
+        await using var connection = await OpenAsync();
+
+        // Id 可以被用户关掉，那就退到 Timestamp；两个都没有只能不排序（表里没有顺序依据）
+        string? orderColumn = await ResolveOrderColumnAsync(connection, table);
+
         await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT TOP (@count) * FROM {Quote(table)} ORDER BY [Id] DESC";
+        command.CommandText = orderColumn is null
+            ? $"SELECT TOP (@count) * FROM {Quote(table)}"
+            : $"SELECT TOP (@count) * FROM {Quote(table)} ORDER BY {Quote(orderColumn)} DESC";
         AddParameter(command, "@count", count);
 
-        var table2 = new DataTable();
+        var result = new DataTable();
         await using var reader = await command.ExecuteReaderAsync();
-        table2.Load(reader);
-        return table2;
+        result.Load(reader);
+        return result;
+    }
+
+    /// <summary>排序列：优先 Id，其次 Timestamp；两列都不存在则返回 null</summary>
+    private static async Task<string?> ResolveOrderColumnAsync(DbConnection connection, string table)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT CASE WHEN COL_LENGTH(@name, N'Id') IS NOT NULL THEN N'Id' " +
+            "WHEN COL_LENGTH(@name, N'Timestamp') IS NOT NULL THEN N'Timestamp' END";
+        AddParameter(command, "@name", table);
+
+        return await command.ExecuteScalarAsync() as string;
     }
 
     // 下面三个是拼 SQL 的工具方法。internal 是为了让 TriggerLogStore 复用同一份
     // 标识符转义逻辑 —— 转义规则散成两份迟早会走偏。
 
-    internal static async Task<DbConnection> OpenAsync(AppDbContext db)
-    {
-        var connection = db.Database.GetDbConnection();
-        if (connection.State != ConnectionState.Open)
-        {
-            await connection.OpenAsync();
-        }
-
-        return connection;
-    }
+    /// <summary>开一个数据库连接：动态表的建表/写入/查询都走这里，调用方用 await using 释放</summary>
+    internal static async Task<DbConnection> OpenAsync() => await SqlConnectionFactory.OpenAsync();
 
     internal static void AddParameter(DbCommand command, string name, object value)
     {

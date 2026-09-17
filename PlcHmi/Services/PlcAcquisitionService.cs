@@ -18,7 +18,7 @@ public sealed class PlcAcquisitionService : IDisposable     /// 明确禁止继�
     /// <summary>一次最多读多少个寄存器：Modbus 单次读保持寄存器的上限就是 125</summary>
     private const int MaxRegistersPerRead = 125;
 
-    private readonly ModbusService _modbus;
+    private readonly IModbusClient _modbus;
     private readonly IReadOnlyList<PlcTag> _tags;       // _代表只能类内部访问
 
     /// <summary>要读的区段（一个存储组一段），顺序固定，构造时快照</summary>
@@ -30,7 +30,7 @@ public sealed class PlcAcquisitionService : IDisposable     /// 明确禁止继�
     private CancellationTokenSource? _cts;
     private Task? _loop;
 
-    public PlcAcquisitionService(ModbusService modbus, IReadOnlyList<PlcTag> tags, IReadOnlyList<ReadRange> ranges)
+    public PlcAcquisitionService(IModbusClient modbus, IReadOnlyList<PlcTag> tags, IReadOnlyList<ReadRange> ranges)
     {
         _modbus = modbus;
         _tags = tags;
@@ -210,7 +210,8 @@ public sealed class PlcAcquisitionService : IDisposable     /// 明确禁止继�
         }
     }
 
-    private static Sample ToSample(PlcTag tag, short raw, DateTime timestamp)
+    /// <summary>原始值 → 工程值：项目唯一的业务公式，独立出来便于单测</summary>
+    internal static Sample ToSample(PlcTag tag, short raw, DateTime timestamp)
         => new(tag, raw, raw * tag.Scale + tag.Offset, timestamp);
 
     /// <summary>把 NModbus 那一大段英文异常压成一句话，界面上才看得清</summary>

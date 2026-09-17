@@ -17,7 +17,7 @@ public sealed class ModbusScanService
     private const int PointDelayMs = 5;
 
     public Task<IReadOnlyList<ScanResult>> ScanAsync(
-        ModbusService modbus,
+        IModbusClient modbus,
         ushort startAddress,
         ushort endAddress,
         ushort batchSize,

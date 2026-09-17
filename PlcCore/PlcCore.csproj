@@ -8,13 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Modbus 通信 + EF Core 数据访问：供 PlcHmi 通过 ProjectReference 复用这一份实现 -->
-    <PackageReference Include="DotNetEnv" Version="3.1.1" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.10" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.10">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
+    <!-- Modbus 通信 + 数据库连接：供 PlcHmi 通过 ProjectReference 复用这一份实现 -->
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
     <PackageReference Include="NModbus" Version="3.0.81" />
   </ItemGroup>
 

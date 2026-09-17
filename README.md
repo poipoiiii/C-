@@ -41,22 +41,32 @@
                                                              └──────────────────────────┘
 ```
 
-一个类库装地基，两个可独立运行的程序：
+一个类库装地基，两个可独立运行的程序，外加一个测试工程：
 
 | 项目 | 类型 | 作用 |
 |---|---|---|
-| [PlcCore](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/PlcCore.csproj) | 类库 | 地基：Modbus 通信封装 / EF 上下文 / DataRecord 实体 / 数据库迁移 |
+| [PlcCore](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/PlcCore.csproj) | 类库 | 地基：Modbus 通信封装（[IModbusClient](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Services/IModbusClient.cs)）/ 数据库连接工厂（连接串来自 `.env`） |
 | [PlcSimulator](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/Program.cs) | 控制台 | 假 PLC：一个端口挂 3 个从站，没真设备也能跑通全链路，还能验证扫描功能 |
 | [PlcHmi](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml) | WPF 桌面 | 完整上位机：连接 / 扫描点位 / 实时曲线 / 动态建表落库 |
+| [PlcTests](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcTests/PlcTests.csproj) | 测试 | xunit：动态表拼 SQL 的白名单校验、机型名校验、点位模型联动、换算公式 |
 
-`PlcHmi` 通过 `ProjectReference` 引用 `PlcCore`，通信与数据库代码只有一份（见 [PlcHmi.csproj](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/PlcHmi.csproj#L21-L24)）。
+`PlcHmi` 通过 `ProjectReference` 引用 `PlcCore`，通信与数据库代码只有一份（见 [PlcHmi.csproj](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/PlcHmi.csproj#L21-L24)）。根目录的 [c_Test.sln](file:///d:/taoxi_download_for_use/no_use_do/c_Test/c_Test.sln) 把四个工程串在一起，`dotnet build` 一次编译全部。
 
-配置文件两份，分工明确：
+配置与运行产物的位置是一套固定约定，按用途分目录（见 [AppPaths.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/AppPaths.cs)）：
 
-| 文件 | 内容 | 是否入库 |
+| 路径 | 内容 | 是否入库 |
 |---|---|---|
 | `.env`（模板 [.env.example](file:///d:/taoxi_download_for_use/no_use_do/c_Test/.env.example)） | 数据库地址、账号、密码 | ❌ 已在 [.gitignore](file:///d:/taoxi_download_for_use/no_use_do/c_Test/.gitignore) 里排除 |
-| [plc-config.json](file:///d:/taoxi_download_for_use/no_use_do/c_Test/plc-config.json) | 采集点位表 + 目标表名 + 长表/宽表模式 | ✅ 跟着代码一起版本管理 |
+| `data/` | **唯一的运行根目录**：配置 / 日志 / 导出 / 更新包全在它里面，按用途分子目录 | 只放行 `configs/` |
+| `data/configs/`\[机型\].json | **一台机器一份**：连接参数（IP/端口/从站号/采集周期）+ 点位表 + 存储组 + 触发规则 | ✅ 跟着代码一起版本管理 |
+| `data/logs/` | 运行日志：按天滚动，只留 30 天 | ❌ |
+| `data/exports/` | 历史数据导出 | ❌ |
+| `data/updates/` | 远程更新包：应用成功后只留 2 份以便回滚 | ❌ |
+| `data/last-profile.txt` | 上次使用的机型 | ❌ |
+
+根目录怎么定：向上找 `.env` / `.git` 的那一层（开发时就是仓库根），找不到就用 exe 目录（现场部署）；目录不可写时（例如装在 Program Files）整体回退到 `%ProgramData%\PlcHmi`。
+
+**换机型就是换配置文件**：工具栏最左侧的「机型」下拉选已有档案，也可以直接敲一个新名字（第一次上机就是这么建档的），点位表 / 存储组 / 触发规则 / 连接参数整套跟着换；切换会先断开连接，避免拿错从站号继续读。启动时用 `dotnet run --project PlcHmi\PlcHmi.csproj -- --config 挤出机A` 直接指定机型，不指定就用上次那个。
 
 ---
 
@@ -64,35 +74,63 @@
 
 ```
 c_Test/
+├── data/                             # 唯一的运行根目录：只放行 configs，其余整个目录不入库
+│   ├── configs/                      # 机型配置：一台机器一份（README 见「二、数据是怎么流动的」）
+│   │   └── 默认.json                 # 连接参数 + 点位表 + 存储组 + 触发规则
+│   ├── logs/                         # 运行日志（保留 30 天）
+│   ├── exports/                      # 历史数据导出
+│   ├── updates/                      # 远程更新包（保留 2 份）
+│   └── last-profile.txt              # 上次用的机型
 ├── PlcCore/                          # 地基类库（被 PlcHmi 引用）
-│   ├── Models/DataRecord.cs          # 数据库实体
-│   ├── Data/AppDbContext.cs          # EF Core 上下文（连接串来自 .env）
-│   ├── Data/AppDbContextFactory.cs   # 给 dotnet ef 命令用的设计时工厂
-│   ├── Services/ModbusService.cs     # Modbus TCP 通信封装（单点读 + 批量读）
-│   └── Migrations/                   # EF Core 生成的建表脚本
+│   ├── Data/SqlConnectionFactory.cs  # 数据库连接工厂（连接串来自 .env）
+│   └── Services/
+│       ├── IModbusClient.cs          # Modbus 客户端能力（抽取出来为了可测 + 可换库）
+│       └── ModbusService.cs          # Modbus TCP 通信封装（单点读 + 批量读）
 ├── PlcSimulator/                     # 仿真 PLC（从站）
 │   ├── Program.cs                    # 起监听、挂多个从站、每秒刷新数据
 │   ├── DeviceProfile.cs              # 设备档案：从站号/名称/开放多少寄存器/刷新规则
+│   ├── HandshakeDevice.cs            # 模拟现场握手设备（信号位 → 应答位时序）
 │   └── LimitedSlaveDataStore.cs      # 只开放指定地址，越界回异常码 02
 ├── PlcHmi/                           # WPF 上位机（MVVM）
-│   ├── App.xaml(.cs)                 # 启动 + 加载 .env
-│   ├── MainWindow.xaml(.cs)          # 三分页界面 / 卡片自适应列数
+│   ├── App.xaml(.cs)                 # 启动 + 加载 .env + 全应用共用样式
+│   ├── MainWindow.xaml(.cs)          # 四分页界面 / 卡片自适应列数
+│   ├── RecordHistoryWindow.xaml(.cs) # 点卡片曲线弹出的「表记录历史」窗
 │   ├── Models/
 │   │   ├── PlcTag.cs                 # 点位：地址+名称+单位+Scale+Offset+宽表列名（可编辑）
-│   │   ├── PlcConfig.cs              # 配置对象：点位表 + 存储映射（落 plc-config.json）
+│   │   ├── PlcConfig.cs              # 机型配置对象：连接参数 + 点位表 + 存储组 + 触发规则
 │   │   ├── Sample.cs / AcquisitionBatch.cs  # 一轮采集结果（成功样本 + 失败点位）
+│   │   ├── TriggerRule.cs            # 触发规则：信号/应答地址 + 超时
 │   │   └── ScanResult.cs             # 扫描结果一行
 │   ├── Services/
+│   │   ├── AppPaths.cs               # 目录约定：data/ 下的 configs|logs|exports|updates
+│   │   ├── AppServices.cs            # 组合根：需要 new 具体实现的地方只有这里
+│   │   ├── ConfigStore.cs            # 机型配置读写（一个实例 = 一个机型）
 │   │   ├── PlcAcquisitionService.cs  # 后台采集循环，异常分层
 │   │   ├── ModbusScanService.cs      # 寄存器扫描（分段批读 + 失败段逐点定位）
 │   │   ├── SlaveProbeService.cs      # 从站号探测（短超时 + 分批并行）
-│   │   ├── DynamicTableStore.cs      # 动态建表/写入/查询（表名列名白名单防注入）
-│   │   └── ConfigStore.cs            # plc-config.json 读写
+│   │   ├── TriggerWatchService.cs    # 触发监听（高频轮询信号位 + 握手应答）
+│   │   ├── TriggerLogStore.cs        # 触发记录表读写
+│   │   ├── StorageGroupValidator.cs  # 存储组校验（组名/表名/区段/列数上限）
+│   │   ├── BindingErrorTraceListener.cs  # 把 WPF 绑定错误写进日志
+│   │   └── DynamicTableStore.cs      # 动态建表/写入/查询（表名列名白名单防注入）
 │   └── ViewModels/
-│       ├── MainViewModel.cs          # 主视图模型（连接/扫描/采集/存储/查询）
+│       ├── MainViewModel.cs          # 外壳：机型 / 连接 / 采集生命周期 / 状态栏
+│       ├── DashboardViewModel.cs     # 页签①：实时卡片与曲线，按存储组分段
+│       ├── DashboardGroupViewModel.cs # 页签①：一个存储组的一段卡片（可折叠）
+│       ├── ScanViewModel.cs          # 页签②：扫描寄存器、点位表编辑
+│       ├── StorageViewModel.cs       # 页签③：存储组草稿、建表与校验
+│       ├── TriggerViewModel.cs       # 页签④：触发规则、报警、触发记录
+│       ├── TableHistoryViewModel.cs  # 「表记录历史」弹窗：目标表最近记录
 │       └── TagViewModel.cs           # 单张点位卡片 + 滚动曲线
-├── plc-config.json                   # 界面配置（点位表 + 目标表）
-└── start.md                          # 两条运行命令
+├── PlcTests/                         # xunit 测试工程（只测纯逻辑，不连 PLC、不连库）
+│   ├── DynamicTableStoreTests.cs     # 标识符白名单 / 列名校验 / 建表语句
+│   ├── StorageGroupValidatorTests.cs # 组名校验 / 区段重叠 / 宽表列数上限
+│   ├── ConfigStoreTests.cs           # 机型名白名单（含路径穿越）
+│   ├── PlcTagTests.cs                # 名称↔列名联动 / 人读地址
+│   ├── AcquisitionServiceTests.cs    # 换算公式
+│   └── TriggerWatchServiceTests.cs   # 握手时序（用假客户端驱动）
+├── c_Test.sln                        # 四个工程的解决方案（dotnet build / dotnet test 用）
+└── start.md                          # 运行与测试命令
 ```
 
 ---
@@ -105,11 +143,17 @@ c_Test/
 # 终端 1：仿真 PLC（127.0.0.1:5020，从站 1/2/3）
 dotnet run --project PlcSimulator\PlcSimulator.csproj
 
-# 终端 2：上位机界面（默认已填 127.0.0.1:5020，点【连接】即开始采集）
+# 终端 2：上位机界面（默认已填 127.0.0.1:5020，点【连接】→【开始采集】）
 dotnet run --project PlcHmi\PlcHmi.csproj
 ```
 
-**界面推荐操作顺序**：连接 → 「采集点位」页扫描 40001~40040 → 勾选可读地址加入点位表、改名称与 Scale → 「存储映射」页选目标表与长/宽表 → 点【建表 / 校验结构】→ 回看板看曲线。
+不连 PLC 也能验证逻辑（动态表拼 SQL、机型名校验、换算公式这些纯逻辑）：
+
+```powershell
+dotnet test          # 根目录执行，走 c_Test.sln，跑 PlcTests
+```
+
+**界面推荐操作顺序**：连接 → 「采集点位」页扫描 40001~40040 → 勾选可读地址加入点位表、改名称与 Scale → 「存储映射」页选目标表与长/宽表 → 点【建表 / 校验结构】→ 回看板点【开始采集】看曲线。
 
 ---
 
@@ -129,14 +173,13 @@ dotnet run --project PlcHmi\PlcHmi.csproj
 
 单独包一层的好处：以后换 HslCommunication 或别的库，只改这一个文件。
 
-### 2. 数据模型与数据库（EF Core 部分）
+### 2. 数据库连接与表结构
 
-- 实体 [DataRecord.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Models/DataRecord.cs)：`Id` 主键 + 时间戳 + 寄存器地址 + 原始值 + 工程值。
-- 上下文 [AppDbContext.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Data/AppDbContext.cs)：`DbSet<DataRecord>` 对应 `DataRecords` 表；连接串不写死，用局部函数 `Get` 从环境变量拼出来（[L14-L22](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Data/AppDbContext.cs#L14-L22)），缺配置时给一句清晰报错。
+- 连接工厂 [SqlConnectionFactory.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Data/SqlConnectionFactory.cs)：只做两件事——按 `.env` 的 `DB_SERVER/DB_NAME/DB_USER/DB_PASSWORD` 拼连接串、[OpenAsync](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Data/SqlConnectionFactory.cs#L30-L43) 开一个连接（开失败会把半开连接释放掉）；缺配置时给一句清晰报错。
 - `.env` 由 `DotNetEnv` 加载，[Env.TraversePath().Load()](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/App.xaml.cs#L9-L22) 会从当前目录向上找（没有 `.env` 也允许启动，只在读写库时报错）。
-- 建表两种方式：`db.Database.EnsureCreated()` 最省事；`Migrations/InitialCreate` 是 EF 迁移脚本，规范做法是 `dotnet ef database update`。**迁移命令要在 `PlcCore` 目录下执行**，否则找不到 `.env`（原因写在 [AppDbContextFactory.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Data/AppDbContextFactory.cs#L7-L11)）。
+- **表结构不由代码里的实体决定**：目标表名、列名是运行时才定的（长表固定列 / 宽表一个点位一列），所以建表语句由 [DynamicTableStore.BuildCreateScript](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/DynamicTableStore.cs#L54-L79) 现场拼，界面点【建表 / 校验结构】时执行。
 
-> 注意：本项目里 EF Core 只负责「控制台采集 + 固定表 `DataRecords`」。界面上的动态表（表名/列名可变）走的是 ADO.NET，见第 5 节 —— 因为 EF 的实体是编译期固定的。
+> 为什么不用 ORM：EF 的实体是编译期固定的，而这里"一张表长什么样"要等用户在界面上选完点位才知道 —— 硬套 ORM 只能得到一层用不上的抽象。所以全项目统一走 ADO.NET：**值一律参数化，标识符一律过白名单**（见第 5 节）。
 
 ### 3. 仿真 PLC：怎么模拟「一个网关挂多台设备」
 
@@ -147,19 +190,21 @@ dotnet run --project PlcHmi\PlcHmi.csproj
 
 ### 4. 界面结构：三个页签
 
-[MainWindow.xaml](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml) 顶部是共用工具条（连接/从站/采集控制），下面是 `TabControl`：
+[MainWindow.xaml](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml) 顶部是共用工具条（机型/连接参数/从站/采集控制），下面是 `TabControl`：
 
 | 页签 | 干什么 |
 |---|---|
-| 实时看板 | 每点位一张卡片（大数字 + 原始值 + 60 点滚动曲线），下方是数据库最近 50 条记录 |
+| 实时看板 | 每点位一张卡片（大数字 + 原始值 + 60 点滚动曲线），按存储组分段、每段可折叠；点卡片里的曲线弹出「表记录历史」窗 |
 | 采集点位 | 扫描寄存器 → 勾选加入点位表 → 编辑名称/单位/Scale/Offset/宽表列名 |
-| 存储映射 | 选目标表与长表/宽表 → 预览建表语句 → 建表/校验结构 |
+| 存储映射 | 选目标表与长表/宽表 → 预览建表语句 → 建表/校验结构；组表与建表预览之间的分隔条可上下拖动调高 |
 
 几个 WPF 技巧：
 
 - **卡片列数自适应**：[MainWindow.xaml.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml.cs#L14-L40) 定义了一个依赖属性 `CardColumns`，卡片区尺寸变化时按宽度重算一行放几张，绑给 `UniformGrid.Columns`。用 `UniformGrid` 而不是 `WrapPanel`，是因为前者会均分宽度、把整行排满。
 - **状态灯三态**：连上且无错→绿、连上有错→红、未连接→灰，靠 `MultiDataTrigger` 实现（[L126-L137](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml#L126-L137)）。
-- **最近记录表列不固定**：长表/宽表列不同，所以 `AutoGenerateColumns="True"` 直接绑一个 `DataView`（[L276-L278](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml#L276-L278)）。
+- **最近记录表列不固定**：长表/宽表列不同，所以「表记录历史」窗里 `AutoGenerateColumns="True"` 直接绑一个 `DataView`（[RecordHistoryWindow.xaml](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/RecordHistoryWindow.xaml#L27-L29)）。
+- **看板按存储组分段**：`DashboardViewModel.RefreshGrouping` 把卡片按 `PlcTag.Group` 归到 `DashboardGroupViewModel` 里，界面一个 `Expander` 一段；只重排卡片不重建，所以改地址、调区段不会清空曲线。
+- **点曲线看记录历史**：卡片曲线挂的是 [PreviewMouseLeftButtonUp](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml.cs#L55-L78)（Preview 不会被图表自己的鼠标处理吃掉），按地址反查覆盖它的存储组 → 目标表，再用非模态小窗展示这张表最近的记录。
 - **从站号框回车即生效**：绑定是 `LostFocus` 提交，[PreviewKeyDown](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml.cs#L42-L53) 里手动 `UpdateSource()`，免得「敲了字没生效」的误会。
 
 ### 5. 动态表：DynamicTableStore（本项目最值得看的一段）
@@ -185,7 +230,7 @@ dotnet run --project PlcHmi\PlcHmi.csproj
 - 点位列是 `NOT NULL` 的 → 放宽成 `NULL`（某个点位本次读失败时该列写 NULL，不该让整行插入失败）；
 - 表里存在**既非空、又不属于当前点位表**的列（比如长表改建出来的 `RawValue`）→ 提前点名为「⚠ 阻断列」，因为插入语句不会写它，SQL Server 会直接报错（[L184-L193](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/DynamicTableStore.cs#L184-L193)）。
 
-`await using var db = new AppDbContext()` + 用完即释放：**DbContext 不是线程安全的，一次操作一个上下文**最稳妥。
+`await using var connection = await SqlConnectionFactory.OpenAsync()` + 用完即释放：SQL 连接是稀缺资源，**一次操作一个连接**最稳妥（动态表那几处都是这个写法）。
 
 ### 6. 点位扫描与从站探测
 
@@ -212,22 +257,39 @@ dotnet run --project PlcHmi\PlcHmi.csproj
 | 先刷界面、后落库 | 数据库出问题也不能影响实时监控（[L84-L113](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/PlcAcquisitionService.cs#L84-L113)） |
 | 事件 `BatchCompleted / Failed / PersistFailed` | 发布-订阅解耦：服务只管发，界面只管收 |
 
-### 8. MainViewModel：状态、命令与线程
+### 8. 视图模型：一个外壳 + 四个页签
 
-[MainViewModel.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs) 是全项目最大的文件，但套路固定：
+界面按页签拆成五个视图模型，**每个 TabItem 的 `DataContext` 指向自己的那个**（见 [MainWindow.xaml](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml#L154-L157)），页签内部的绑定因此不用改一层前缀：
+
+| 类 | 管什么 |
+|---|---|
+| [MainViewModel](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs)（外壳） | 机型配置、连接、采集生命周期、状态栏；把 `Config` / `Modbus` 借给页签 |
+| [DashboardViewModel](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/DashboardViewModel.cs) | 点位卡片与曲线、最近记录 |
+| [ScanViewModel](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/ScanViewModel.cs) | 寄存器扫描、点位表增删改 |
+| [StorageViewModel](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/StorageViewModel.cs) | 存储组草稿、建表 / 校验结构、归组展示 |
+| [TriggerViewModel](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/TriggerViewModel.cs) | 触发规则、报警条、触发记录 |
+
+共享状态只有一个来源：**配置对象**（点位表 / 存储组 / 触发规则都在 `Config` 里），页签不互相持有对方。需要跨页签的动作由外壳出面：点位变了调 `OnTagsChanged()`（重建卡片 → 存盘 → 采集中则重启采集），规则变了调 `RestartTriggerWatchAsync()`。
+
+几个共同套路：
 
 - **`[ObservableProperty]`**：写 `private string _statusText = "未连接";`，编译时自动生成 `StatusText` 属性，值一变界面自动刷新（`CommunityToolkit.Mvvm` 源生成器，省掉手写 `INotifyPropertyChanged`）。
-- **`[RelayCommand]`**：`[RelayCommand(CanExecute = nameof(CanConnect))]` 自动生成 `ConnectCommand`，XAML 里 `Command="{Binding ConnectCommand}"`；`CanExecute` 控制按钮能否点，所以 `IsConnected`/`IsAcquiring`/`IsScanning` 一变，按钮可用状态跟着联动（[L67-L76](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs#L67-L76)）。
-- **后台线程不能碰界面**：采集回调统一用 [`_dispatcher.BeginInvoke`](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs#L371-L395) 切回 UI 线程。忘记这一步，程序会随机崩溃。
-- **`partial void OnXxxChanged`**：源生成器提供的钩子。改采集周期立即作用到运行中的循环（[L424-L431](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs#L424-L431)）；改从站号则**重连**再采集，因为从站号是 `ModbusService` 构造时固定的（[L300-L309](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs#L300-L309)）。
-- **草稿值 vs 生效值**：界面上的表名/模式只是草稿，点【建表 / 校验结构】或【保存配置】才提交成生效值并落盘（[PersistBatchAsync](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs#L441-L456) 用的是 `_config.Storage`）。免得边打字边把数据写到还不存在的表上。
-- **改点位就重载**：[ApplyTagChanges](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs#L581-L591) 重建卡片 → 存盘 → 采集中则重启采集让新点位生效。
-- 两个小细节值得学：地址输入支持 `40001` 这种人读地址自动转协议地址（[TryParseAddress](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs#L659-L680)）；从站号输入框绑的是**字符串**而不是 `byte`，否则打字中间态会弹红色校验错误（[L59-L63](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs#L59-L63)）。
+- **`[RelayCommand]`**：`[RelayCommand(CanExecute = nameof(CanProbeSlaves))]` 自动生成 `ProbeSlavesCommand`，XAML 里 `Command="{Binding ProbeSlavesCommand}"`；`CanExecute` 控制按钮能否点，所以 `IsProbing` 一变，按钮可用状态跟着联动。
+- **开关代替按钮对**：工具条上「连接/断开」与「开始/停止采集」各是一个 `hc:ToggleBlock`，`IsChecked` 双向绑到 `ConnectionSwitch`/`AcquisitionSwitch` 上，由这两个属性的变更处理器执行动作；状态回写（连接失败、切换机型、切从站）经 `_syncingSwitches` 只刷新显示，避免"改状态 → 又触发一遍动作"的循环（[MainViewModel](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs#L289-L356)）。
+- **后台线程不能碰界面**：采集回调统一用 `Dispatcher.BeginInvoke` 切回 UI 线程。忘记这一步，程序会随机崩溃。
+- **`partial void OnXxxChanged`**：源生成器提供的钩子。改采集周期立即作用到运行中的循环；改从站号则**重连**，因为从站号是 `ModbusService` 构造时固定的（原来在采就接着采）。
+- **草稿值 vs 生效值**：存储组在界面上只是草稿，点【建表 / 校验结构】或【保存配置】才提交成生效值并落盘（[CommitMapping](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/StorageViewModel.cs)）。免得边打字边把数据写到还不存在的表上。
+- 两个小细节值得学：地址输入支持 `40001` 这种人读地址自动转协议地址（[TryParseAddress](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/ScanViewModel.cs)）；从站号输入框绑的是**字符串**而不是 `byte`，否则打字中间态会弹红色校验错误。
 
-### 9. 配置与图形
+### 9. 排查用得到的两个约定
+
+- **日志**：`data/logs/plc-<日期>.log`，按天滚动、只留 `AppPaths.LogRetentionDays`（30）天，配置在 [App.xaml.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/App.xaml.cs#L45-L55)。状态栏是给操作工看的"现象"，日志是给事后排查看的"时间线"，两者分工。
+- **WPF 绑定错误进日志**：绑错属性名时界面不报错、也不崩，只是那一格"没有数据"，肉眼很难发现。[BindingErrorTraceListener](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/BindingErrorTraceListener.cs) 把 WPF 的绑定告警接到日志里（这次拆视图模型就是靠它抓到 6 条 `Cannot find source for binding`）。
+
+### 10. 配置与图形
 
 - [PlcTag.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Models/PlcTag.cs) 是普通 `class`（不再是 `record`），因为它在表格里可编辑、要序列化到 json。`OnNameChanged` 里做了「改名称时列名跟着变，但列名被单独改过就不动」的联动（[L31-L37](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Models/PlcTag.cs#L31-L37)）。
-- [ConfigStore.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/ConfigStore.cs)：json 读写 + `UnsafeRelaxedJsonEscaping`（中文直接写出来，配置文件要给人看）+ 配置损坏时退回默认点位保证界面能起；[ResolveRootDirectory](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/ConfigStore.cs#L53-L69) 从运行目录向上找 `.env`/`.git` 来定位仓库根。
+- [ConfigStore.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/ConfigStore.cs)：机型配置读写，一个实例对一个 `data/configs/<机型>.json`。json 读写 + `UnsafeRelaxedJsonEscaping`（中文直接写出来，配置文件要给人看）+ 配置损坏时退回默认点位保证界面能起；机型名过白名单正则（它要当文件名，顺带挡路径穿越）；配置里带 `ConfigVersion`，格式版本高于程序时按默认点位启动并在状态栏说明。启动选哪个机型见 [ResolveStartupProfile](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/ConfigStore.cs#L69-L82)：`--config` > 上次用的 > 已有第一个 > 默认。整套目录布局（统一在 `data/` 下：configs / logs / exports / updates）在 [AppPaths.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/AppPaths.cs)。
 - [TagViewModel.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/TagViewModel.cs)：滑动窗口曲线（[MaxPoints = 60](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/TagViewModel.cs#L16-L19)），每次 `Apply` 加点、删最旧；`MarkFailed` 只标灰自己并显示失败原因。
 
 ---
@@ -238,7 +300,7 @@ dotnet run --project PlcHmi\PlcHmi.csproj
 |---|---|---|
 | `namespace` 文件作用域 | 所有 .cs 顶部 | 一个文件一个命名空间，少一层缩进 |
 | `?` 可空引用 + 判空 | ModbusService | 编译期提醒你别忘判空 |
-| `IDisposable` / `using var` / `await using` | ModbusService、AppDbContext | 网络、数据库资源必须释放 |
+| `IDisposable` / `using var` / `await using` | ModbusService、SqlConnectionFactory | 网络、数据库资源必须释放 |
 | `async` / `await` / `Task` | 采集与落库 | 等 IO 时不阻塞线程 |
 | `CancellationToken` | 采集循环、扫描、仿真器 | .NET 标准的「停止」信号 |
 | `event Action<T>` | PlcAcquisitionService | 发布-订阅，让服务不认识界面 |
@@ -254,8 +316,11 @@ dotnet run --project PlcHmi\PlcHmi.csproj
 | `$"..."` + `:F2` / `:D4` / `:HH:mm:ss` | 各处 | 字符串插值与格式化 |
 | 构造函数注入 + `readonly` | 所有 Service | 依赖从外面给，不在里面 `new` |
 | 参数化 SQL + 标识符白名单 | DynamicTableStore | 拼 SQL 时：值用参数，名字过白名单 |
+| 接口 `IModbusClient` | PlcCore/Services | 面向接口写，单测能塞假实现（握手时序就是这么测的） |
+| `Serilog` + `WriteTo.File` | App.xaml.cs | 日志落文件、按天滚动、限制保留天数 |
+| 手写组合根 `AppServices` | PlcHmi/Services | 需要 `new` 具体实现的地方收一处，视图模型只拿现成的 |
 | 正则 `Regex` | DynamicTableStore | 校验标识符合法性 |
-| EF Core Code First | Data/、Migrations/ | 先写实体，再生成表（固定表用它，动态表用 ADO.NET） |
+| 连接串从环境变量拼 | SqlConnectionFactory | 账号密码不进源码与 git 历史 |
 
 ---
 
@@ -271,8 +336,11 @@ dotnet run --project PlcHmi\PlcHmi.csproj
 | 卡片数字是 `--`、圆点灰 | 该点位读失败或未连接，卡片右下角会显示失败原因 |
 | 落库失败「不能将值 NULL 插入列」 | 目标表里有非空列没被写入，按【建表/校验结构】的 ⚠ 提示换表名或把列改可空 |
 | 表名/列名报「不合法」 | 只能中英文/数字/下划线，且不能数字开头 |
-| `dotnet ef` 报找不到连接串 | 没在 `PlcCore` 目录下执行，见 [AppDbContextFactory](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Data/AppDbContextFactory.cs) |
 | 界面改了列名但预览没变 | 正常情况下会实时联动；若没变，确认改的是点位表那一行（双击编辑） |
+| 启动后点位表不是我预期那台机器 | 机型记的是上次用的那个；看状态栏左侧的「机型」提示，或启动时加 `--config <机型>` |
+| 反复提示「连接参数保存失败」 | 程序目录不可写（常见于装在 Program Files），检查是否已回退到 `%ProgramData%\PlcHmi` 下读取配置 |
+| 界面某一格一直空白/没数据 | 多半是绑定没找到属性（不报错也不崩）：看 `data/logs/plc-<日期>.log` 里的 `WPF 绑定：` 警告 |
+| 现场出了问题但说不清现象 | 先看 `data/logs/plc-<日期>.log`：连接、采集启停、触发、报警、异常都在里面 |
 
 ---
 
@@ -285,5 +353,5 @@ dotnet run --project PlcHmi\PlcHmi.csproj
 3. 给采集加**自动重连**（当前传输层故障只上报，不重连）；
 4. 落库改**攒批写入**（现在是每个周期一次插入）；
 5. 加历史数据查询页与报警阈值（超限变红 / 触发记录）；
-6. 引入日志库（Serilog / NLog）替代 `Console.WriteLine` 与状态栏提示；
+6. 把日志接上**滚动归档**（按大小切分）或加一个「打开日志目录」按钮，现场让人一键取日志；
 7. 多设备并行采集：每台 PLC 一个采集任务，按「设备 + 从站号」分别落表。

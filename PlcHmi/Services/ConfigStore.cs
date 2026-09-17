@@ -1,59 +1,143 @@
 using System.IO;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using PlcHmi.Models;
 
 namespace PlcHmi.Services;
 
 /// <summary>
-/// 界面配置（采集点位表 + 存储组）的读写：plc-config.json 放在仓库根目录，
-/// 与 .env 同级，便于跟着代码一起查看和版本管理。
+/// 机型配置的读写：一个机型一份 data/configs/&lt;机型&gt;.json，是**现场副本** ——
+/// 首次运行由 <see cref="EnsureConfigFile"/> 从随包发布的机型模板（Templates/&lt;机型&gt;.json）复制而来，
+/// 之后现场改的就是这一份；模板保持干净，同型号的配置才能完全一致、整份复制给另一台机器。
+/// 一个实例对应一个机型；换机型就换实例（见 MainViewModel）。
 /// </summary>
-public static class ConfigStore
+public sealed class ConfigStore
 {
-    private static readonly JsonSerializerOptions Options = new()
+    /// <summary>机型名要当文件名用：先卡死字符集，顺带挡掉路径穿越</summary>
+    private static readonly Regex ProfileNamePattern =
+        new(@"^[\u4e00-\u9fa5A-Za-z0-9_-]{1,32}$", RegexOptions.Compiled);
+
+    /// <summary>配置文件的 JSON 写法：缩进 + 中文不转义（配置文件要给人看）；本机档案也共用它</summary>
+    internal static JsonSerializerOptions JsonOptions { get; } = new()
     {
         WriteIndented = true,
-        // 中文直接写出来，别转成 \uXXXX，配置文件要给人看
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
-    public static string FilePath { get; } = Path.Combine(ResolveRootDirectory(), "plc-config.json");
-
-    public static PlcConfig Load()
+    private ConfigStore(string profile)
     {
-        try
+        Profile = profile;
+        FilePath = PathFor(profile);
+    }
+
+    /// <summary>机型代号 → data/configs 下的配置文件路径</summary>
+    public static string PathFor(string profile) => Path.Combine(AppPaths.Configs, profile + ".json");
+
+    /// <summary>机型名（= data/configs 下的文件名去掉 .json）</summary>
+    public string Profile { get; }
+
+    /// <summary>本机型的配置文件全路径</summary>
+    public string FilePath { get; }
+
+    /// <summary>最近一次 Load 的告警（配置损坏 / 版本高于程序），没问题时为 null</summary>
+    public string? LoadWarning { get; private set; }
+
+    /// <summary>打开指定机型的配置；机型名不合法直接抛，避免拼出目录穿越的路径</summary>
+    public static ConfigStore Open(string profile)
+    {
+        string name = profile?.Trim() ?? string.Empty;
+        if (!IsValidProfileName(name))
         {
-            if (!File.Exists(FilePath))
-            {
-                return CreateDefault();
-            }
-
-            var json = File.ReadAllText(FilePath);
-            var config = JsonSerializer.Deserialize<PlcConfig>(json, Options);
-            if (config is null || config.Tags.Count == 0)
-            {
-                return CreateDefault();
-            }
-
-            return Migrate(config);
+            throw new ArgumentException(
+                $"机型名不合法：{profile}（只能用中英文、数字、下划线、短横线，最长 32 个字符）", nameof(profile));
         }
-        catch (Exception)
+
+        return new ConfigStore(name);
+    }
+
+    public static bool IsValidProfileName(string? name) => name is not null && ProfileNamePattern.IsMatch(name);
+
+    /// <summary>data/configs 下已有的机型，按名字排序</summary>
+    public static IReadOnlyList<string> ListProfiles() =>
+    [
+        .. Directory.EnumerateFiles(AppPaths.Configs, "*.json")
+            .Select(Path.GetFileNameWithoutExtension)
+            .OfType<string>()
+            .Where(IsValidProfileName)
+            .OrderBy(name => name, StringComparer.CurrentCulture)
+    ];
+
+    /// <summary>
+    /// 保证 data/configs/&lt;机型&gt;.json 存在：没有就从随包发布的机型模板复制一份当现场副本。
+    /// 返回 false 表示模板也没有（安装包不完整）—— 调用方按内置默认点位建档案，并提示用户核对。
+    /// </summary>
+    public static bool EnsureConfigFile(string profile)
+    {
+        if (File.Exists(PathFor(profile)))
         {
-            // 配置损坏时退回默认点位，避免界面起不来
+            return true;
+        }
+
+        string template = Path.Combine(AppPaths.Templates, profile + ".json");
+        if (!File.Exists(template))
+        {
+            return false;
+        }
+
+        File.Copy(template, PathFor(profile));
+        return true;
+    }
+
+    public PlcConfig Load()
+    {
+        LoadWarning = null;
+
+        if (!File.Exists(FilePath))
+        {
             return CreateDefault();
         }
+
+        PlcConfig? config;
+        try
+        {
+            config = JsonSerializer.Deserialize<PlcConfig>(File.ReadAllText(FilePath), JsonOptions);
+        }
+        catch (JsonException)
+        {
+            LoadWarning = $"配置 {FilePath} 解析失败，已退回默认点位（原文件未改动）";
+            return CreateDefault();
+        }
+
+        if (config is null || config.Tags.Count == 0)
+        {
+            return CreateDefault();
+        }
+
+        if (config.ConfigVersion > PlcConfig.CurrentVersion)
+        {
+            LoadWarning =
+                $"配置 {FilePath} 的格式版本是 {config.ConfigVersion}，高于本程序的 {PlcConfig.CurrentVersion}：" +
+                "已按默认点位启动，请升级程序，或改用与程序匹配的配置";
+            return CreateDefault();
+        }
+
+        return Migrate(config);
     }
 
-    public static void Save(PlcConfig config)
+    public void Save(PlcConfig config)
     {
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(config, Options));
+        config.ConfigVersion = PlcConfig.CurrentVersion;
+        config.MachineName = Profile;
+        File.WriteAllText(FilePath, JsonSerializer.Serialize(config, JsonOptions));
     }
 
-    private static PlcConfig CreateDefault() => new()
+    private PlcConfig CreateDefault() => new()
     {
+        ConfigVersion = PlcConfig.CurrentVersion,
+        MachineName = Profile,
         Tags = [.. PlcTag.Default],
-        Groups = [new StorageGroup(StorageGroup.DefaultName, "DataRecords", StorageMode.Long, 0, 20)]
+        Groups = [new StorageGroup(StorageGroup.DefaultName, "DataRecords", StorageMode.Wide, 0, 20)]
     };
 
     /// <summary>
@@ -62,9 +146,11 @@ public static class ConfigStore
     /// 2) 只有一个组、但区段盖不住点位的（老配置没有区段信息，反序列化拿到的只是默认值）
     ///    → 按所有点位的地址范围把它扩开。
     /// </summary>
-    private static PlcConfig Migrate(PlcConfig config)
+    private PlcConfig Migrate(PlcConfig config)
     {
-        bool changed = false;
+        bool changed = config.ConfigVersion != PlcConfig.CurrentVersion || config.MachineName != Profile;
+        config.ConfigVersion = PlcConfig.CurrentVersion;
+        config.MachineName = Profile;
 
         if (config.Groups.Count == 0)
         {
@@ -104,23 +190,5 @@ public static class ConfigStore
         }
 
         return config;
-    }
-
-    /// <summary>从运行目录向上找仓库根（认 .env 或 .git），找不到就用运行目录</summary>
-    private static string ResolveRootDirectory()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        for (int depth = 0; depth < 8 && directory is not null; depth++)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, ".env")) ||
-                Directory.Exists(Path.Combine(directory.FullName, ".git")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        return AppContext.BaseDirectory;
     }
 }

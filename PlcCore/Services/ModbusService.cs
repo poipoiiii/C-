@@ -8,19 +8,19 @@ namespace PlcCore.Services;
 /// 所有读写都串行化：采集循环、寄存器扫描、触发监听共用同一条 TCP 连接，
 /// NModbus 的同步接口不是线程安全的，两个线程同时收发会串包。
 /// </summary>
-public class ModbusService : IDisposable
+public class ModbusService : IModbusClient
 {
-    private readonly byte _slaveId;
+    private readonly byte _slaveId; /// 从站 ID
 
     /// <summary>连接级互斥：把同一时刻的 Modbus 事务限制成一个</summary>
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SemaphoreSlim _gate = new(1, 1);   /// 信号量，一个信号量一个线程
 
-    private TcpClient? _tcpClient;
-    private IModbusMaster? _master;
+    private TcpClient? _tcpClient;  /// TCP 连接
+    private IModbusMaster? _master; /// Modbus 主站
 
-    public ModbusService(byte slaveId = 1)
+    public ModbusService(byte slaveId = 1)  
     {
-        _slaveId = slaveId;
+        _slaveId = slaveId; 
     }
 
     public void Connect(string ip, int port)

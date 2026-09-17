@@ -1,0 +1,43 @@
+{
+  "ConfigVersion": 1,
+  "MachineName": "AIIR",
+  "Tags": [
+    {
+      "Address": 0,
+      "Name": "温度",
+      "Unit": "℃",
+      "Scale": 0.1,
+      "Offset": 0,
+      "ColumnName": "温度"
+    },
+    {
+      "Address": 1,
+      "Name": "压力",
+      "Unit": "kPa",
+      "Scale": 0.01,
+      "Offset": 0,
+      "ColumnName": "压力"
+    },
+    {
+      "Address": 2,
+      "Name": "产量",
+      "Unit": "件",
+      "Scale": 1,
+      "Offset": 0,
+      "ColumnName": "产量"
+    }
+  ],
+  "Groups": [
+    {
+      "Name": "默认组",
+      "TableName": "DataRecords",
+      "Mode": 1,
+      "StartAddress": 0,
+      "Count": 20,
+      "UseIdentityColumn": true,
+      "UseTimestampColumn": true
+    }
+  ],
+  "Triggers": []
+}
+

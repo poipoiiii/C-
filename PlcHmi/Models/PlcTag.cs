@@ -5,7 +5,7 @@ namespace PlcHmi.Models;
 
 /// <summary>
 /// 采集点位：协议地址 + 变量名 + 换算规则 + 落库列名（宽表模式下用列名建表）。
-/// 会被序列化到 plc-config.json，所以必须是可读写的普通属性。
+/// 会被序列化到 data/configs/&lt;机型&gt;.json，所以必须是可读写的普通属性。
 /// </summary>
 public partial class PlcTag : ObservableObject
 {
@@ -45,6 +45,8 @@ public partial class PlcTag : ObservableObject
     private string _group = string.Empty;
 
     /// <summary>点位表里的归组展示：没落到任何区段时明说，免得看起来像已归组</summary>
+    // 只是给人看的展示值，写进配置文件只会让同名机的文件出现无谓差异（区段才是权威）
+    [JsonIgnore]
     public string GroupText => string.IsNullOrEmpty(Group) ? "未归组" : Group;
 
     /// <summary>
