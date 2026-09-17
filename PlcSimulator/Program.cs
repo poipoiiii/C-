@@ -24,6 +24,7 @@ internal static class Program
 
         var profiles = DeviceProfile.CreateAll();
         var stores = new Dictionary<byte, LimitedSlaveDataStore>();
+        var handshakes = new List<HandshakeDevice>();
 
         var factory = new ModbusFactory();
         using var network = factory.CreateSlaveNetwork(listener);
@@ -33,12 +34,22 @@ internal static class Program
             var store = new LimitedSlaveDataStore(profile.RegisterCount, CoilCount);
             byte unitId = profile.UnitId;
 
-            // 打印主站的每次读请求，带上从站号，便于确认采的是哪台设备
-            store.HoldingRegisters.Read += (start, count) =>
-                Console.WriteLine($"  <- 从站 {unitId}（{profile.Name}）读保持寄存器：起始={start} 数量={count}");
+            // 打印主站的每次读请求，带上从站号，便于确认采的是哪台设备。
+            // 握手设备不打印：上位机以 100ms 的节奏轮询信号位，打出来会把控制台刷满，
+            // 它的时序改由 HandshakeDevice 自己记录。
+            if (profile.Handshake is null)
+            {
+                store.HoldingRegisters.Read += (start, count) =>
+                    Console.WriteLine($"  <- 从站 {unitId}（{profile.Name}）读保持寄存器：起始={start} 数量={count}");
+            }
 
             stores[unitId] = store;
             network.AddSlave(factory.CreateSlave(unitId, store));
+
+            if (profile.Handshake is not null)
+            {
+                handshakes.Add(new HandshakeDevice(unitId, profile.Name, profile.Handshake, store));
+            }
         }
 
         Console.WriteLine($"仿真 PLC 已启动：{IPAddress.Loopback}:{Port}，同一端口挂 {profiles.Count} 个从站");
@@ -50,6 +61,12 @@ internal static class Program
             Console.WriteLine($"           {profile.Map}");
         }
 
+        foreach (var handshake in handshakes)
+        {
+            Console.WriteLine($"\n  ▶ {handshake.Describe()}");
+            Console.WriteLine("     上位机侧把它配成一条触发规则（信号 20 / 应答 21），连上就能看到握手与触发记录。");
+        }
+
         Console.WriteLine("\n按 Ctrl+C 停止。\n");
 
         using var cts = new CancellationTokenSource();
@@ -59,7 +76,7 @@ internal static class Program
             cts.Cancel();
         };
 
-        var simTask = Task.Run(() => SimulateAsync(profiles, stores, cts.Token));
+        var simTask = Task.Run(() => SimulateAsync(profiles, stores, handshakes, cts.Token));
 
         try
         {
@@ -75,34 +92,54 @@ internal static class Program
     }
 
     /// <summary>
-    /// 每秒刷新所有从站的寄存器。真实设备之间互不干扰，这里也各刷各的。
+    /// 仿真主循环。分两个节奏：数据每秒刷新一次（真实设备的采样节奏），
+    /// 握手状态机每 100ms 推一次 —— 握手一轮要走四步、还要应对每秒 1~2 次的触发，
+    /// 用 1 秒的节奏推会直接成为瓶颈、把上位机的握手拖挂。
     /// </summary>
     private static async Task SimulateAsync(
         IReadOnlyList<DeviceProfile> profiles,
         IReadOnlyDictionary<byte, LimitedSlaveDataStore> stores,
+        IReadOnlyList<HandshakeDevice> handshakes,
         CancellationToken token)
     {
+        const int TickMs = 100;
+        const int RefreshMs = 1000;
+
         var start = DateTime.Now;
         var buffers = profiles.ToDictionary(p => p.UnitId, p => new ushort[p.RegisterCount]);
+        var nextRefreshAt = DateTime.Now;
 
         while (!token.IsCancellationRequested)
         {
-            double t = (DateTime.Now - start).TotalSeconds;
+            var now = DateTime.Now;
 
-            foreach (var profile in profiles)
+            if (now >= nextRefreshAt)
             {
-                var values = buffers[profile.UnitId];
-                Array.Clear(values);
-                profile.Fill(t, values);
-                stores[profile.UnitId].HoldingRegisters.WritePoints(0, values);
+                double t = (now - start).TotalSeconds;
+                foreach (var profile in profiles)
+                {
+                    var values = buffers[profile.UnitId];
+                    Array.Clear(values);
+                    profile.Fill(t, values);
+
+                    // 只写数据区：握手区由 HandshakeDevice 自己维护，写全量会把信号/应答冲掉
+                    stores[profile.UnitId].HoldingRegisters.WritePoints(0, values[..profile.DataCount]);
+                }
+
+                Console.WriteLine($"[{now:HH:mm:ss}] " + string.Join("  |  ",
+                    profiles.Select(p => FormatLine(p, buffers[p.UnitId]))));
+
+                nextRefreshAt = now.AddMilliseconds(RefreshMs);
             }
 
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] " + string.Join("  |  ",
-                profiles.Select(p => FormatLine(p, buffers[p.UnitId]))));
+            foreach (var handshake in handshakes)
+            {
+                handshake.Step(now);
+            }
 
             try
             {
-                await Task.Delay(1000, token);
+                await Task.Delay(TickMs, token);
             }
             catch (TaskCanceledException)
             {
@@ -117,7 +154,9 @@ internal static class Program
         {
             1 => $"1#挤出机 温度={values[0]} 压力={values[1]} 产量={values[2]} 设定={values[3]} 状态={values[4]}",
             2 => $"2#注塑机 料筒={values[0]} 注射={values[1]} 锁模={values[2]} 良品={values[5]} 不良={values[6]}",
-            _ => $"3#公用 水温={values[0]} 流量={values[1]} 电耗={values[2]} 报警={values[3]}"
+            3 => $"3#公用 水温={values[0]} 流量={values[1]} 电耗={values[2]} 报警={values[3]}",
+            4 => $"4#握手 数据0={values[0]} 数据1={values[1]}（信号/应答见上面的握手日志）",
+            _ => $"从站 {profile.UnitId}"
         };
 
         return text;

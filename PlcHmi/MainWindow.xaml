@@ -287,11 +287,16 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
-                        <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
+                    <!-- 扫描结果与采集点位表左右并列：默认 40% / 60%，中间的分隔条可拖动调宽 -->
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="4*" MinWidth="320" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="6*" MinWidth="320" />
+                    </Grid.ColumnDefinitions>
 
-                    <hc:Card Grid.Row="0" Padding="14,12" Margin="0,0,0,10">
+                    <hc:Card Grid.Row="0" Grid.ColumnSpan="3" Padding="14,12" Margin="0,0,0,10">
                         <WrapPanel VerticalAlignment="Center">
                             <TextBlock Text="扫描寄存器" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" />
                             <TextBox hc:InfoElement.Title="起始地址" hc:InfoElement.TitlePlacement="Left" Width="160"
@@ -309,7 +314,7 @@
                         </WrapPanel>
                     </hc:Card>
 
-                    <hc:Card Grid.Row="1" Padding="14" Margin="0,0,0,10">
+                    <hc:Card Grid.Row="1" Grid.Column="0" Padding="14" Margin="0,0,3,10">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -320,7 +325,7 @@
                                     <Rectangle Width="3" Height="16" Fill="#409EFF"
                                                RadiusX="1.5" RadiusY="1.5" VerticalAlignment="Center" Margin="0,0,8,0" />
                                     <TextBlock Text="扫描结果" Style="{StaticResource SectionTitle}" />
-                                    <TextBlock Text="地址可填 40001 这种人读地址；只区分可读/读异常，勾选后加入点位表"
+                                    <TextBlock Text="地址可填 40001 这种人读地址；"
                                                Style="{StaticResource SectionHint}" />
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
@@ -366,7 +371,13 @@
                         </Grid>
                     </hc:Card>
 
-                    <hc:Card Grid.Row="2" Padding="14">
+                    <!-- 拖动分隔条调整左右宽度（4* / 6* 只是初始比例） -->
+                    <GridSplitter Grid.Row="1" Grid.Column="1" Width="6" Margin="0,0,0,10"
+                                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                  ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"
+                                  Background="#EBEEF5" />
+
+                    <hc:Card Grid.Row="1" Grid.Column="2" Padding="14" Margin="3,0,0,10">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -381,12 +392,14 @@
                                                Style="{StaticResource SectionHint}" />
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                    <Button Content="删除选中" Command="{Binding RemoveSelectedTagCommand}" Width="88" />
+                                    <Button Content="删除选中" Width="88"
+                                            Command="{Binding RemoveSelectedTagCommand}"
+                                            CommandParameter="{Binding SelectedItems, ElementName=TagGrid}" />
                                     <Button Content="保存配置" Command="{Binding SaveConfigCommand}" Width="88"
                                             Margin="8,0,0,0" />
                                 </StackPanel>
                             </Grid>
-                            <DataGrid Grid.Row="1" ItemsSource="{Binding TagConfigs}" SelectedItem="{Binding SelectedTag}"
+                            <DataGrid x:Name="TagGrid" Grid.Row="1" ItemsSource="{Binding TagConfigs}"
                                       Style="{StaticResource FlatGrid}">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="人读地址" Width="130" IsReadOnly="True"
@@ -404,12 +417,16 @@
                                                         ElementStyle="{StaticResource CellNumber}" />
                                     <DataGridTextColumn Header="宽表列名" Width="*" Binding="{Binding ColumnName}"
                                                         ElementStyle="{StaticResource CellText}" />
+                                    <!-- 存储组：由地址落在哪个区段决定，这里只展示；要改就改「存储映射」页的区段 -->
+                                    <DataGridTextColumn Header="存储组" Width="120" IsReadOnly="True"
+                                                        Binding="{Binding GroupText}"
+                                                        ElementStyle="{StaticResource CellText}" />
                                 </DataGrid.Columns>
                             </DataGrid>
                         </Grid>
                     </hc:Card>
 
-                    <TextBlock Grid.Row="3" Text="{Binding TagStatus}" Foreground="#909399" Margin="4,10,0,0" />
+                    <TextBlock Grid.Row="2" Grid.ColumnSpan="3" Text="{Binding TagStatus}" Foreground="#909399" Margin="4,10,0,0" />
                 </Grid>
             </TabItem>
 
@@ -423,20 +440,59 @@
                     </Grid.RowDefinitions>
 
                     <hc:Card Grid.Row="0" Padding="14,12" Margin="0,0,0,10">
-                        <WrapPanel VerticalAlignment="Center">
-                            <TextBlock Text="目标表" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" />
-                            <ComboBox Width="280" IsEditable="True" ItemsSource="{Binding Tables}"
-                                      Text="{Binding TableName, UpdateSourceTrigger=PropertyChanged}" />
-                            <Button Content="刷新表清单" Command="{Binding RefreshTablesCommand}" Width="100"
-                                    Margin="8,0,0,0" />
-                            <Rectangle Style="{StaticResource Divider}" />
-                            <TextBlock Text="存储模式" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" />
-                            <ComboBox Width="360" ItemsSource="{Binding ModeOptions}" DisplayMemberPath="Display"
-                                      SelectedValuePath="Mode" SelectedValue="{Binding SelectedMode}" />
-                            <Rectangle Style="{StaticResource Divider}" />
-                            <Button Content="建表 / 校验结构" Command="{Binding CreateTableCommand}"
-                                    Style="{StaticResource ButtonPrimary}" Width="130" />
-                        </WrapPanel>
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <WrapPanel Grid.Row="0" VerticalAlignment="Center">
+                                <TextBlock Text="存储组" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" />
+                                <TextBlock Text="一个区段一张表：从起始地址起连续读 N 个寄存器，点位按地址自动归组"
+                                           Style="{StaticResource SectionHint}" />
+                                <Button Content="新增组" Command="{Binding AddGroupCommand}" Width="80" Margin="14,0,0,0" />
+                                <Button Content="删除组" Command="{Binding RemoveGroupCommand}" Width="80" Margin="8,0,0,0" />
+                                <Rectangle Style="{StaticResource Divider}" />
+                                <Button Content="刷新表清单" Command="{Binding RefreshTablesCommand}" Width="100" />
+                                <Button Content="建表 / 校验结构" Command="{Binding CreateTableCommand}"
+                                        Style="{StaticResource ButtonPrimary}" Width="130" Margin="8,0,0,0" />
+                            </WrapPanel>
+
+                            <DataGrid Grid.Row="1" x:Name="GroupGrid" Height="170" Margin="0,10,0,0"
+                                      ItemsSource="{Binding Groups}" SelectedItem="{Binding SelectedGroup}"
+                                      Style="{StaticResource FlatGrid}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="组名" Width="140" Binding="{Binding Name}"
+                                                        ElementStyle="{StaticResource CellText}" />
+                                    <DataGridTextColumn Header="起始地址" Width="110" Binding="{Binding StartAddress}"
+                                                        ElementStyle="{StaticResource CellNumber}" />
+                                    <DataGridTextColumn Header="寄存器数" Width="110" Binding="{Binding Count}"
+                                                        ElementStyle="{StaticResource CellNumber}" />
+                                    <DataGridTextColumn Header="区段（人读）" Width="180" IsReadOnly="True"
+                                                        Binding="{Binding DisplayRange}"
+                                                        ElementStyle="{StaticResource CellMono}" />
+                                    <DataGridTemplateColumn Header="目标表" Width="220">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox Margin="0,2" IsEditable="True"
+                                                          ItemsSource="{Binding DataContext.Tables, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                          Text="{Binding TableName, UpdateSourceTrigger=PropertyChanged}" />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="存储模式" Width="*">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox Margin="0,2"
+                                                          ItemsSource="{Binding DataContext.ModeOptions, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                          DisplayMemberPath="Display" SelectedValuePath="Mode"
+                                                          SelectedValue="{Binding Mode}" />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
                     </hc:Card>
 
                     <hc:Card Grid.Row="1" Padding="14">
@@ -457,7 +513,7 @@
                                                Foreground="#E6A23C" />
                                 </StackPanel>
                                 <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#909399" FontSize="12"
-                                           Text="表名与列名会先过标识符白名单（中英文/数字/下划线，不能数字开头），再用 [ ] 包裹执行，避免 SQL 注入。表不存在按下面语句创建；宽表已存在会自动补齐缺的列。界面上的表名/模式是草稿，点【建表 / 校验结构】才生效。" />
+                                           Text="每个组一张表，点位按自己的「存储组」落到对应表。表名与列名会先过标识符白名单（中英文/数字/下划线，不能数字开头），再用 [ ] 包裹执行，避免 SQL 注入。表不存在按下面语句创建；宽表已存在会自动补齐缺的列。组表是草稿，点【建表 / 校验结构】或【保存配置】才生效。" />
                             </StackPanel>
                             <TextBox Grid.Row="2" Text="{Binding CreateScriptPreview, Mode=OneWay}" IsReadOnly="True"
                                      AcceptsReturn="True" FontFamily="Consolas" FontSize="13" TextWrapping="NoWrap"
@@ -467,6 +523,94 @@
                     </hc:Card>
 
                     <TextBlock Grid.Row="2" Text="{Binding RecordsInfo}" Foreground="#909399" Margin="4,10,0,0" />
+                </Grid>
+            </TabItem>
+            <!-- ==================== 触发记录 ==================== -->
+            <TabItem Header="触发记录">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <hc:Card Grid.Row="0" Padding="14,12" Margin="0,0,0,10">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <WrapPanel Grid.Row="0" VerticalAlignment="Center">
+                                <TextBlock Text="触发规则" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" />
+                                <TextBlock Text="PLC 置信号 1 → 记一条记录 → 上位机写应答 1 → PLC 清信号 → 上位机写应答 0"
+                                           Style="{StaticResource SectionHint}" />
+                                <TextBox hc:InfoElement.Title="轮询间隔(ms)" hc:InfoElement.TitlePlacement="Left"
+                                         Width="160" Margin="14,0,0,0"
+                                         Text="{Binding TriggerPollIntervalMs, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button Content="新增规则" Command="{Binding AddTriggerRuleCommand}" Width="88"
+                                        Margin="8,0,0,0" />
+                                <Button Content="删除选中" Width="88" Margin="8,0,0,0"
+                                        Command="{Binding RemoveTriggerRuleCommand}"
+                                        CommandParameter="{Binding SelectedItems, ElementName=TriggerGrid}" />
+                                <Button Content="保存配置" Command="{Binding SaveTriggerRulesCommand}" Width="88"
+                                        Margin="8,0,0,0" />
+                            </WrapPanel>
+
+                            <DataGrid Grid.Row="1" x:Name="TriggerGrid" Height="180" Margin="0,10,0,0"
+                                      ItemsSource="{Binding Triggers}" SelectedItem="{Binding SelectedTrigger}"
+                                      Style="{StaticResource FlatGrid}">
+                                <DataGrid.Columns>
+                                    <DataGridCheckBoxColumn Header="启用" Width="60"
+                                                            Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" />
+                                    <DataGridTextColumn Header="规则名" Width="140" Binding="{Binding Name}"
+                                                        ElementStyle="{StaticResource CellText}" />
+                                    <DataGridTextColumn Header="信号地址" Width="100" Binding="{Binding SignalAddress}"
+                                                        ElementStyle="{StaticResource CellNumber}" />
+                                    <DataGridTextColumn Header="应答地址" Width="100" Binding="{Binding AckAddress}"
+                                                        ElementStyle="{StaticResource CellNumber}" />
+                                    <DataGridTextColumn Header="信号(人读)" Width="110" IsReadOnly="True"
+                                                        Binding="{Binding DisplaySignal}"
+                                                        ElementStyle="{StaticResource CellMono}" />
+                                    <DataGridTextColumn Header="应答(人读)" Width="110" IsReadOnly="True"
+                                                        Binding="{Binding DisplayAck}"
+                                                        ElementStyle="{StaticResource CellMono}" />
+                                    <DataGridTextColumn Header="超时(ms)" Width="100" Binding="{Binding TimeoutMs}"
+                                                        ElementStyle="{StaticResource CellNumber}" />
+                                    <DataGridTextColumn Header="状态" Width="*" IsReadOnly="True"
+                                                        Binding="{Binding StatusText}"
+                                                        ElementStyle="{StaticResource CellText}" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </hc:Card>
+
+                    <hc:Card Grid.Row="1" Padding="14">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                                <StackPanel Orientation="Horizontal">
+                                    <Rectangle Width="3" Height="16" Fill="#E6A23C"
+                                               RadiusX="1.5" RadiusY="1.5" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBlock Text="最近触发记录" Style="{StaticResource SectionTitle}" />
+                                    <TextBlock Text="{Binding TriggerRecordsInfo}" Style="{StaticResource SectionHint}" />
+                                </StackPanel>
+                                <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#909399" FontSize="12"
+                                           Text="只记「事件发生过」：时间戳 + 规则名 + 信号/应答地址。机台号、批次号、卷号这类业务字段由后续处理写入这张表即可。" />
+                            </StackPanel>
+                            <DataGrid Grid.Row="1" ItemsSource="{Binding TriggerView}" AutoGenerateColumns="True"
+                                      IsReadOnly="True" Style="{StaticResource FlatGrid}"
+                                      ColumnHeaderStyle="{StaticResource FlatHeader}" />
+                        </Grid>
+                    </hc:Card>
+
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="4,10,0,0">
+                        <TextBlock Text="{Binding TriggerStatus}" Foreground="#909399" />
+                        <TextBlock Text="{Binding TriggerAlarm}" Foreground="#F56C6C" Margin="16,0,0,0" />
+                    </StackPanel>
                 </Grid>
             </TabItem>
         </TabControl>

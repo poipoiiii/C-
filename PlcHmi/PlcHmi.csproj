@@ -19,8 +19,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 复用采集项目里的 ModbusService / AppDbContext / DataRecord，不重复实现 -->
-    <ProjectReference Include="..\PlcDataCollector\PlcDataCollector.csproj" />
+    <!-- 复用 PlcCore 里的 ModbusService / AppDbContext / DataRecord，不重复实现 -->
+    <ProjectReference Include="..\PlcCore\PlcCore.csproj" />
   </ItemGroup>
 
 </Project>

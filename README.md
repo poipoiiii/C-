@@ -34,22 +34,22 @@
 │ 同一端口挂多个从站：        │  ────────────────────────►     │ 曲线 / 卡片 / 动态表        │
 │  1#挤出机 2#注塑机 3#公用   │   返回 ushort[] 或异常码 02     └─────────────┬────────────┘
 └───────────────────────────┘                                              │ ADO.NET 动态 SQL
-┌───────────────────────────┐   控制台采集（可选，最小示例）                 ▼
-│ PlcDataCollector           │  ─────────────────────────►   ┌──────────────────────────┐
-│ 无界面的采集程序             │                                │ SQL Server                │
-└───────────────────────────┘                                │ DataRecords / 自定义表      │
+                                                                           ▼
+                                                             ┌──────────────────────────┐
+                                                             │ SQL Server               │
+                                                             │ DataRecords / 自定义表   │
                                                              └──────────────────────────┘
 ```
 
-三个可独立运行的项目：
+一个类库装地基，两个可独立运行的程序：
 
 | 项目 | 类型 | 作用 |
 |---|---|---|
+| [PlcCore](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/PlcCore.csproj) | 类库 | 地基：Modbus 通信封装 / EF 上下文 / DataRecord 实体 / 数据库迁移 |
 | [PlcSimulator](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/Program.cs) | 控制台 | 假 PLC：一个端口挂 3 个从站，没真设备也能跑通全链路，还能验证扫描功能 |
-| [PlcDataCollector](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Program.cs) | 控制台 | 最小采集程序：读一个寄存器 → 换算 → 存库 → 打印 |
 | [PlcHmi](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml) | WPF 桌面 | 完整上位机：连接 / 扫描点位 / 实时曲线 / 动态建表落库 |
 
-`PlcHmi` 通过 `ProjectReference` 复用 `PlcDataCollector` 里的通信与数据库代码（见 [PlcHmi.csproj](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/PlcHmi.csproj#L21-L24)），不重复实现。
+`PlcHmi` 通过 `ProjectReference` 引用 `PlcCore`，通信与数据库代码只有一份（见 [PlcHmi.csproj](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/PlcHmi.csproj#L21-L24)）。
 
 配置文件两份，分工明确：
 
@@ -64,17 +64,16 @@
 
 ```
 c_Test/
-├── PlcSimulator/                     # 仿真 PLC（从站）
-│   ├── Program.cs                    # 起监听、挂多个从站、每秒刷新数据
-│   ├── DeviceProfile.cs              # 设备档案：从站号/名称/开放多少寄存器/刷新规则
-│   └── LimitedSlaveDataStore.cs      # 只开放指定地址，越界回异常码 02
-├── PlcDataCollector/                 # 采集核心（被 PlcHmi 复用）
-│   ├── Program.cs                    # 入口：连接 + 每秒采集一次
+├── PlcCore/                          # 地基类库（被 PlcHmi 引用）
 │   ├── Models/DataRecord.cs          # 数据库实体
 │   ├── Data/AppDbContext.cs          # EF Core 上下文（连接串来自 .env）
 │   ├── Data/AppDbContextFactory.cs   # 给 dotnet ef 命令用的设计时工厂
 │   ├── Services/ModbusService.cs     # Modbus TCP 通信封装（单点读 + 批量读）
-│   └── Services/DataCollectionService.cs  # 采集 + 换算 + 落库
+│   └── Migrations/                   # EF Core 生成的建表脚本
+├── PlcSimulator/                     # 仿真 PLC（从站）
+│   ├── Program.cs                    # 起监听、挂多个从站、每秒刷新数据
+│   ├── DeviceProfile.cs              # 设备档案：从站号/名称/开放多少寄存器/刷新规则
+│   └── LimitedSlaveDataStore.cs      # 只开放指定地址，越界回异常码 02
 ├── PlcHmi/                           # WPF 上位机（MVVM）
 │   ├── App.xaml(.cs)                 # 启动 + 加载 .env
 │   ├── MainWindow.xaml(.cs)          # 三分页界面 / 卡片自适应列数
@@ -110,14 +109,6 @@ dotnet run --project PlcSimulator\PlcSimulator.csproj
 dotnet run --project PlcHmi\PlcHmi.csproj
 ```
 
-只想跑命令行采集（最小示例）：
-
-```powershell
-dotnet run --project PlcDataCollector\PlcDataCollector.csproj -- 127.0.0.1 5020
-```
-
-`127.0.0.1 5020` 是命令行参数，对应 [Program.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Program.cs#L8-L10) 的 `args[0]`/`args[1]`，不传则默认 `192.168.1.10:502`。
-
 **界面推荐操作顺序**：连接 → 「采集点位」页扫描 40001~40040 → 勾选可读地址加入点位表、改名称与 Scale → 「存储映射」页选目标表与长/宽表 → 点【建表 / 校验结构】→ 回看板看曲线。
 
 ---
@@ -126,49 +117,35 @@ dotnet run --project PlcDataCollector\PlcDataCollector.csproj -- 127.0.0.1 5020
 
 ### 1. 通信层：ModbusService
 
-[ModbusService.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Services/ModbusService.cs)
+[ModbusService.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Services/ModbusService.cs)
 
 | 知识点 | 说明 |
 |---|---|
 | `IDisposable` + `using var` | `TcpClient` 是网络资源，用完必须释放。调用方写 `using var modbus = new ModbusService(1)`，离开作用域自动关连接 |
-| `?` 可空引用 | 项目开了 `<Nullable>enable</Nullable>`，`IModbusMaster? _master` 表示「可能还没连」。读之前先判断，把空引用异常换成能看懂的提示（[L34-L37](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Services/ModbusService.cs#L34-L37)） |
+| `?` 可空引用 | 项目开了 `<Nullable>enable</Nullable>`，`IModbusMaster? _master` 表示「可能还没连」。读之前先判断，把空引用异常换成能看懂的提示（[L34-L37](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Services/ModbusService.cs#L34-L37)） |
 | 类型转换 | 寄存器读回来是 `ushort[]`，业务要按有符号看，所以 `(short)result[0]` |
-| 两个读方法 | [ReadRegister](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Services/ModbusService.cs#L32-L41) 读单点（采集用）；[ReadRegisters](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Services/ModbusService.cs#L47-L55) 批量读（扫描用，一次最多 125 个） |
+| 两个读方法 | [ReadRegister](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Services/ModbusService.cs#L32-L41) 读单点（采集用）；[ReadRegisters](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Services/ModbusService.cs#L47-L55) 批量读（扫描用，一次最多 125 个） |
 | 从站号 | 构造函数固定 `_slaveId`，所以**切换从站要重连**（见下文 MainViewModel） |
 
 单独包一层的好处：以后换 HslCommunication 或别的库，只改这一个文件。
 
 ### 2. 数据模型与数据库（EF Core 部分）
 
-- 实体 [DataRecord.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Models/DataRecord.cs)：`Id` 主键 + 时间戳 + 寄存器地址 + 原始值 + 工程值。
-- 上下文 [AppDbContext.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Data/AppDbContext.cs)：`DbSet<DataRecord>` 对应 `DataRecords` 表；连接串不写死，用局部函数 `Get` 从环境变量拼出来（[L14-L22](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Data/AppDbContext.cs#L14-L22)），缺配置时给一句清晰报错。
-- `.env` 由 `DotNetEnv` 加载，[Env.TraversePath().Load()](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Program.cs#L6) 会从当前目录向上找；WPF 端同理，见 [App.xaml.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/App.xaml.cs#L10-L21)（没有 `.env` 也允许启动，只在读写库时报错）。
-- 建表两种方式：`db.Database.EnsureCreated()` 最省事；`Migrations/InitialCreate` 是 EF 迁移脚本，规范做法是 `dotnet ef database update`。**迁移命令要在 `PlcDataCollector` 目录下执行**，否则找不到 `.env`（原因写在 [AppDbContextFactory.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Data/AppDbContextFactory.cs#L7-L11)）。
+- 实体 [DataRecord.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Models/DataRecord.cs)：`Id` 主键 + 时间戳 + 寄存器地址 + 原始值 + 工程值。
+- 上下文 [AppDbContext.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Data/AppDbContext.cs)：`DbSet<DataRecord>` 对应 `DataRecords` 表；连接串不写死，用局部函数 `Get` 从环境变量拼出来（[L14-L22](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Data/AppDbContext.cs#L14-L22)），缺配置时给一句清晰报错。
+- `.env` 由 `DotNetEnv` 加载，[Env.TraversePath().Load()](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/App.xaml.cs#L9-L22) 会从当前目录向上找（没有 `.env` 也允许启动，只在读写库时报错）。
+- 建表两种方式：`db.Database.EnsureCreated()` 最省事；`Migrations/InitialCreate` 是 EF 迁移脚本，规范做法是 `dotnet ef database update`。**迁移命令要在 `PlcCore` 目录下执行**，否则找不到 `.env`（原因写在 [AppDbContextFactory.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Data/AppDbContextFactory.cs#L7-L11)）。
 
-> 注意：本项目里 EF Core 只负责「控制台采集 + 固定表 `DataRecords`」。界面上的动态表（表名/列名可变）走的是 ADO.NET，见第 6 节 —— 因为 EF 的实体是编译期固定的。
+> 注意：本项目里 EF Core 只负责「控制台采集 + 固定表 `DataRecords`」。界面上的动态表（表名/列名可变）走的是 ADO.NET，见第 5 节 —— 因为 EF 的实体是编译期固定的。
 
-### 3. 最小采集服务：读 → 换算 → 存
-
-[DataCollectionService.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Services/DataCollectionService.cs#L27-L45)，核心就三行：
-
-```csharp
-short raw = _modbus.ReadRegister(_address);   // 1. 读原始值
-double eng = raw * _scale + _offset;          // 2. 换算工程值
-_db.DataRecords.Add(record);
-await _db.SaveChangesAsync();                 // 3. 异步写库
-```
-
-新手要点：**构造函数注入**（依赖从外面给，不在类里 `new`，字段用 `readonly`）、**`async/await`**（等数据库 IO 时不占线程）、**字符串插值**（`$"...{eng:F2}"` 保留两位小数）。
-入口 [Program.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Program.cs#L29-L41) 是 `while (true)` + `Task.Delay(1000)`，每轮都包 `try/catch` —— **一次失败不能让程序退出**，这是工业软件和练习代码最大的区别。
-
-### 4. 仿真 PLC：怎么模拟「一个网关挂多台设备」
+### 3. 仿真 PLC：怎么模拟「一个网关挂多台设备」
 
 - [DeviceProfile.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/DeviceProfile.cs)：一台设备的档案。`required` 属性表示「创建时必须赋值」；[Fill](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/DeviceProfile.cs#L20-L21) 是一个 `Action<double, ushort[]>` 委托，把「按秒数刷新寄存器」这条规则当成数据传给框架 —— 这是**把函数当参数**的典型用法。
 - [Program.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/Program.cs)：同一端口上 `AddSlave` 多个从站，各自数据互不相干；每秒刷新并打印。
 - [LimitedSlaveDataStore.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/LimitedSlaveDataStore.cs#L40-L46)：越界读写抛 `InvalidModbusRequestException(IllegalDataAddress)`，即回异常码 02。**这样仿真器和真实 PLC 行为一致**——不是所有地址都存在，扫描功能才有得验证。
 - [Ctrl+C 处理](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/Program.cs#L55-L60)：不直接杀进程，而是 `cts.Cancel()` 让循环正常收尾，这是 .NET 推荐的任务取消方式。
 
-### 5. 界面结构：三个页签
+### 4. 界面结构：三个页签
 
 [MainWindow.xaml](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml) 顶部是共用工具条（连接/从站/采集控制），下面是 `TabControl`：
 
@@ -185,7 +162,7 @@ await _db.SaveChangesAsync();                 // 3. 异步写库
 - **最近记录表列不固定**：长表/宽表列不同，所以 `AutoGenerateColumns="True"` 直接绑一个 `DataView`（[L276-L278](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml#L276-L278)）。
 - **从站号框回车即生效**：绑定是 `LostFocus` 提交，[PreviewKeyDown](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml.cs#L42-L53) 里手动 `UpdateSource()`，免得「敲了字没生效」的误会。
 
-### 6. 动态表：DynamicTableStore（本项目最值得看的一段）
+### 5. 动态表：DynamicTableStore（本项目最值得看的一段）
 
 [DynamicTableStore.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/DynamicTableStore.cs)
 
@@ -210,7 +187,7 @@ await _db.SaveChangesAsync();                 // 3. 异步写库
 
 `await using var db = new AppDbContext()` + 用完即释放：**DbContext 不是线程安全的，一次操作一个上下文**最稳妥。
 
-### 7. 点位扫描与从站探测
+### 6. 点位扫描与从站探测
 
 [ModbusScanService.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/ModbusScanService.cs)：Modbus 没有「列出所有点位」的指令，只能试读。策略是**分段批量读**，整段成功就整段标记可读；某段失败再**逐点重读**，定位到底是哪几个地址不可读（[L37-L68](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/ModbusScanService.cs#L37-L68)）。每段/每点之间 Sleep 一下，避免把真实 PLC 打满。取消靠 `CancellationToken`，`token.ThrowIfCancellationRequested()` 在每个循环开头检查。
 
@@ -222,7 +199,7 @@ await _db.SaveChangesAsync();                 // 3. 异步写库
 
 > 局限也写在注释里：个别网关对任何从站号都响应，探测结果只能作参考，最终以现场点表为准。
 
-### 8. 采集循环：异常分层是重点
+### 7. 采集循环：异常分层是重点
 
 [PlcAcquisitionService.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/PlcAcquisitionService.cs)
 
@@ -235,7 +212,7 @@ await _db.SaveChangesAsync();                 // 3. 异步写库
 | 先刷界面、后落库 | 数据库出问题也不能影响实时监控（[L84-L113](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/PlcAcquisitionService.cs#L84-L113)） |
 | 事件 `BatchCompleted / Failed / PersistFailed` | 发布-订阅解耦：服务只管发，界面只管收 |
 
-### 9. MainViewModel：状态、命令与线程
+### 8. MainViewModel：状态、命令与线程
 
 [MainViewModel.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs) 是全项目最大的文件，但套路固定：
 
@@ -247,7 +224,7 @@ await _db.SaveChangesAsync();                 // 3. 异步写库
 - **改点位就重载**：[ApplyTagChanges](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs#L581-L591) 重建卡片 → 存盘 → 采集中则重启采集让新点位生效。
 - 两个小细节值得学：地址输入支持 `40001` 这种人读地址自动转协议地址（[TryParseAddress](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs#L659-L680)）；从站号输入框绑的是**字符串**而不是 `byte`，否则打字中间态会弹红色校验错误（[L59-L63](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs#L59-L63)）。
 
-### 10. 配置与图形
+### 9. 配置与图形
 
 - [PlcTag.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Models/PlcTag.cs) 是普通 `class`（不再是 `record`），因为它在表格里可编辑、要序列化到 json。`OnNameChanged` 里做了「改名称时列名跟着变，但列名被单独改过就不动」的联动（[L31-L37](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Models/PlcTag.cs#L31-L37)）。
 - [ConfigStore.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/ConfigStore.cs)：json 读写 + `UnsafeRelaxedJsonEscaping`（中文直接写出来，配置文件要给人看）+ 配置损坏时退回默认点位保证界面能起；[ResolveRootDirectory](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/ConfigStore.cs#L53-L69) 从运行目录向上找 `.env`/`.git` 来定位仓库根。
@@ -294,7 +271,7 @@ await _db.SaveChangesAsync();                 // 3. 异步写库
 | 卡片数字是 `--`、圆点灰 | 该点位读失败或未连接，卡片右下角会显示失败原因 |
 | 落库失败「不能将值 NULL 插入列」 | 目标表里有非空列没被写入，按【建表/校验结构】的 ⚠ 提示换表名或把列改可空 |
 | 表名/列名报「不合法」 | 只能中英文/数字/下划线，且不能数字开头 |
-| `dotnet ef` 报找不到连接串 | 没在 `PlcDataCollector` 目录下执行，见 [AppDbContextFactory](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcDataCollector/Data/AppDbContextFactory.cs) |
+| `dotnet ef` 报找不到连接串 | 没在 `PlcCore` 目录下执行，见 [AppDbContextFactory](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcCore/Data/AppDbContextFactory.cs) |
 | 界面改了列名但预览没变 | 正常情况下会实时联动；若没变，确认改的是点位表那一行（双击编辑） |
 
 ---

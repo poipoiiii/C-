@@ -1,0 +1,31 @@
+2026-09-17  重构：把地基逻辑抽离到独立类库 PlcCore
+
+【新增】
+- PlcCore 类库（net8.0，RootNamespace=PlcCore）
+  - Models/DataRecord.cs            数据库实体
+  - Data/AppDbContext.cs            EF Core 上下文（连接串来自 .env）
+  - Data/AppDbContextFactory.cs     给 dotnet ef 用的设计时工厂
+  - Services/ModbusService.cs       Modbus TCP 通信封装
+  - Migrations/                     EF Core 迁移脚本（3 个文件）
+  - 命名空间统一为 PlcCore.Models / PlcCore.Data / PlcCore.Services / PlcCore.Migrations
+
+【变更】
+- PlcDataCollector：由「采集核心」改为「命令行最小示例」
+  - 只保留 Program.cs、Services/DataCollectionService.cs
+  - 包引用精简为仅 DotNetEnv，改为 ProjectReference 引用 PlcCore
+- PlcHmi：ProjectReference 由 PlcDataCollector 改为 PlcCore
+  - 4 处 using 由 PlcDataCollector.* 改为 PlcCore.*
+    文件：MainViewModel.cs / DynamicTableStore.cs / PlcAcquisitionService.cs / ModbusScanService.cs
+  - 业务逻辑未改动
+- README.md：项目表、目录树、9 处文件链接同步更新
+- C_study.md：未改动（按老结构写的学习笔记）
+
+【影响】
+- dotnet ef 迁移命令需改在 PlcCore 目录执行：
+    dotnet ef migrations add <名称> --project PlcCore\PlcCore.csproj
+- PlcSimulator：无改动
+
+【验证】
+- dotnet build PlcCore / PlcDataCollector / PlcHmi / PlcSimulator 全部成功，0 警告 0 错误
+- dotnet ef migrations list --no-connect --project PlcCore：
+  EF 已能发现 PlcCore 中的设计时工厂，仅因本地缺 .env 未列出迁移（未完成项，需在有 .env 的环境复验）

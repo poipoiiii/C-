@@ -1,14 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <RootNamespace>PlcDataCollector</RootNamespace>
+    <RootNamespace>PlcCore</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Modbus 通信 + EF Core 数据访问：供 PlcHmi 通过 ProjectReference 复用这一份实现 -->
     <PackageReference Include="DotNetEnv" Version="3.1.1" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.10" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.10">

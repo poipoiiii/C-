@@ -1,12 +1,14 @@
+using System.Collections;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Data;
+using System.Text;
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using PlcDataCollector.Services;
+using PlcCore.Services;
 using PlcHmi.Models;
 using PlcHmi.Services;
 using SkiaSharp;
@@ -45,9 +47,11 @@ public partial class MainViewModel : ObservableObject
     private readonly ModbusScanService _scanService = new();
     private readonly SlaveProbeService _probeService = new();
     private readonly DynamicTableStore _tableStore = new();
+    private readonly TriggerLogStore _triggerStore = new();
 
     private ModbusService? _modbus;
     private PlcAcquisitionService? _acquisition;
+    private TriggerWatchService? _triggerWatch;
     private CancellationTokenSource? _scanCts;
 
     // ---------------- 连接与采集 ----------------
@@ -92,24 +96,57 @@ public partial class MainViewModel : ObservableObject
     private bool _isScanning;
 
     [ObservableProperty] private string _tagStatus = "";
-    [ObservableProperty] private PlcTag? _selectedTag;
 
     // ---------------- 存储映射 ----------------
 
-    [ObservableProperty] private string _tableName = "DataRecords";
-    [ObservableProperty] private StorageMode _selectedMode = StorageMode.Long;
+    /// <summary>界面上的组表草稿，点【建表 / 校验结构】或【保存配置】才提交成生效配置</summary>
+    public ObservableCollection<StorageGroup> Groups { get; }
+
+    /// <summary>组名清单，供界面展示</summary>
+    public ObservableCollection<string> GroupNames { get; } = [];
+
+    [ObservableProperty] private StorageGroup? _selectedGroup;
     [ObservableProperty] private string _storageStatus = "";
     [ObservableProperty] private string _createScriptPreview = "";
     [ObservableProperty] private string _effectiveStorageText = "";
     [ObservableProperty] private DataView? _recentView;
+
+    // ---------------- 触发记录（握手模拟上升沿） ----------------
+
+    /// <summary>触发记录规则（直接就是配置对象里的集合）</summary>
+    public ObservableCollection<TriggerRule> Triggers { get; }
+
+    [ObservableProperty] private TriggerRule? _selectedTrigger;
+
+    /// <summary>信号轮询间隔（毫秒）：触发频繁就调小，默认 100</summary>
+    [ObservableProperty] private int _triggerPollIntervalMs = 100;
+
+    [ObservableProperty] private string _triggerStatus = "未监听";
+    [ObservableProperty] private string _triggerAlarm = string.Empty;
+    [ObservableProperty] private int _triggerCount;
+    [ObservableProperty] private DataView? _triggerView;
+    [ObservableProperty] private string _triggerRecordsInfo = "未加载";
+
+    private readonly HashSet<string> _stuckRules = [];
 
     public MainViewModel()
     {
         _config = ConfigStore.Load();
         ReconcileDefaultColumnNames(_config.Tags);
         TagConfigs = _config.Tags;
-        TableName = _config.Storage.TableName;
-        SelectedMode = _config.Storage.Mode;
+        Triggers = _config.Triggers;
+
+        // 组表在界面上是草稿，改完要点【建表 / 校验结构】或【保存配置】才提交
+        Groups = [.. _config.Groups.Select(g => g.Clone())];
+        Groups.CollectionChanged += OnGroupsChanged;
+        foreach (var group in Groups)
+        {
+            group.PropertyChanged += OnGroupPropertyChanged;
+        }
+
+        RefreshGroupNames();
+        RefreshTagGroups();
+        SelectedGroup = Groups.FirstOrDefault();
 
         ModeOptions =
         [
@@ -129,6 +166,11 @@ public partial class MainViewModel : ObservableObject
             if (IsAcquiring)
             {
                 await RefreshRecordsAsync();
+            }
+
+            if (_triggerWatch is not null)
+            {
+                await RefreshTriggerRecordsAsync();
             }
         };
         _recordTimer.Start();
@@ -174,6 +216,7 @@ public partial class MainViewModel : ObservableObject
             CommError = string.Empty;
             StatusText = $"已连接 {Ip}:{Port}（从站 {SlaveId}）";
             StartAcquisition();
+            StartTriggerWatch();
         }
         catch (Exception ex)
         {
@@ -191,6 +234,7 @@ public partial class MainViewModel : ObservableObject
     private async Task DisconnectAsync()
     {
         await StopAcquisitionAsync();
+        await StopTriggerWatchAsync();
         _scanCts?.Cancel();
         _modbus?.Dispose();
         _modbus = null;
@@ -301,6 +345,7 @@ public partial class MainViewModel : ObservableObject
     private async Task SwitchSlaveAsync()
     {
         await StopAcquisitionAsync();
+        await StopTriggerWatchAsync();
         _modbus?.Dispose();
         _modbus = null;
         IsConnected = false;
@@ -332,7 +377,7 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
-        _acquisition = new PlcAcquisitionService(_modbus, [.. TagConfigs])
+        _acquisition = new PlcAcquisitionService(_modbus, [.. TagConfigs], BuildReadRanges())
         {
             IntervalMs = IntervalMs,
             PersistEnabled = PersistEnabled,
@@ -345,7 +390,7 @@ public partial class MainViewModel : ObservableObject
 
         IsAcquiring = true;
         StatusText = PersistEnabled
-            ? $"采集中：{IntervalMs} ms/次 · 从站 {SlaveId} · {TagConfigs.Count} 个点位 → {_config.Storage.TableName}"
+            ? $"采集中：{IntervalMs} ms/次 · 从站 {SlaveId} · {TagConfigs.Count} 个点位 → {_config.Groups.Count} 张表"
             : $"采集中：{IntervalMs} ms/次 · 从站 {SlaveId} · {TagConfigs.Count} 个点位，未落库";
     }
 
@@ -439,19 +484,44 @@ public partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 按存储映射把一批数据写到目标表。
-    /// 注意用的是 _config.Storage（生效值），界面上的表名/模式只是草稿，点“建表/校验结构”或“保存配置”后才生效，
-    /// 免得边打字边把数据写到还不存在的表上。
+    /// 按存储组把一批数据拆开，各组并发写自己的目标表。
+    /// 归组看地址落在哪个区段（用 _config.Groups 生效值，不看点位上那份展示用的缓存）；
+    /// 界面上的组表是草稿，点【建表/校验结构】或【保存配置】后才生效，
+    /// 免得边打字边把数据写到还不存在的表上。并发写是为了让慢的那张表不拖住其它组。
     /// </summary>
     private async Task PersistBatchAsync(IReadOnlyList<Sample> batch)
     {
-        if (_config.Storage.Mode == StorageMode.Wide)
+        var jobs = new List<Task>();
+
+        foreach (var group in _config.Groups)
         {
-            await _tableStore.InsertWideAsync(_config.Storage.TableName, batch);
+            if (group.Count == 0)
+            {
+                continue;
+            }
+
+            var samples = batch.Where(s => group.Covers(s.Tag.Address)).ToList();
+            if (samples.Count == 0)
+            {
+                continue;
+            }
+
+            jobs.Add(group.Mode == StorageMode.Wide
+                ? _tableStore.InsertWideAsync(group.TableName, samples)
+                : _tableStore.InsertLongAsync(group.TableName, samples));
         }
-        else
+
+        if (jobs.Count > 0)
         {
-            await _tableStore.InsertLongAsync(_config.Storage.TableName, batch);
+            await Task.WhenAll(jobs);
+        }
+
+        // 正常情况下采集只会读区段内的点位，走不到这里；真出现说明区段在采集中被改过，提醒一句
+        int orphan = batch.Count(s => !_config.Groups.Any(g => g.Covers(s.Tag.Address)));
+        if (orphan > 0)
+        {
+            throw new InvalidOperationException(
+                $"有 {orphan} 个采样点不在任何存储组的区段内，没地方落库。去「存储映射」页调整区段范围。");
         }
     }
 
@@ -550,18 +620,27 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>批量移除点位：参数是 DataGrid 当前选中的行（支持框选 / Ctrl / Shift 多选）</summary>
     [RelayCommand]
-    private void RemoveSelectedTag()
+    private void RemoveSelectedTag(IList? selectedRows)
     {
-        if (SelectedTag is null)
+        // SelectedItems 是随界面选择实时变化的活集合，先快照再删，避免边遍历边被改
+        var targets = selectedRows?.OfType<PlcTag>().ToList() ?? [];
+        if (targets.Count == 0)
         {
+            TagStatus = "没有选中点位";
             return;
         }
 
-        var name = SelectedTag.Name;
-        TagConfigs.Remove(SelectedTag);
+        foreach (var tag in targets)
+        {
+            TagConfigs.Remove(tag);
+        }
+
         ApplyTagChanges();
-        TagStatus = $"已删除点位「{name}」";
+        TagStatus = targets.Count == 1
+            ? $"已删除点位「{targets[0].Name}」"
+            : $"已删除 {targets.Count} 个点位";
     }
 
     [RelayCommand]
@@ -651,10 +730,16 @@ public partial class MainViewModel : ObservableObject
             }
         }
 
+        RefreshTagGroups();
         UpdateScriptPreview();
     }
 
-    private void OnTagPropertyChanged(object? sender, PropertyChangedEventArgs e) => UpdateScriptPreview();
+    /// <summary>点位属性变了：地址会改变归组，名称/列名/换算会改变建表预览，都刷新一遍</summary>
+    private void OnTagPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        RefreshTagGroups();
+        UpdateScriptPreview();
+    }
 
     /// <summary>支持输入 40001 这样的人读地址，自动换算成 0-based 协议地址</summary>
     private static bool TryParseAddress(string? text, out ushort address)
@@ -681,30 +766,254 @@ public partial class MainViewModel : ObservableObject
 
     // ---------------- 存储映射 ----------------
 
-    partial void OnTableNameChanged(string value) => UpdateScriptPreview();
+    /// <summary>组表草稿变了：补/退订阅，并刷新组名清单、点位归组与建表预览</summary>
+    private void OnGroupsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null)
+        {
+            foreach (StorageGroup group in e.OldItems)
+            {
+                group.PropertyChanged -= OnGroupPropertyChanged;
+            }
+        }
 
-    partial void OnSelectedModeChanged(StorageMode value) => UpdateScriptPreview();
+        if (e.NewItems is not null)
+        {
+            foreach (StorageGroup group in e.NewItems)
+            {
+                group.PropertyChanged += OnGroupPropertyChanged;
+            }
+        }
 
-    /// <summary>把界面上的草稿值提交成生效值并落盘</summary>
+        RefreshGroupNames();
+        RefreshTagGroups();
+        UpdateScriptPreview();
+    }
+
+    /// <summary>组的区段/组名/表名任一改动，点位的归组和建表预览都要跟着变</summary>
+    private void OnGroupPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        RefreshGroupNames();
+        RefreshTagGroups();
+        UpdateScriptPreview();
+    }
+
+    /// <summary>
+    /// 重新推导每个点位归到哪个组：地址落在哪个区段就归哪个组。
+    /// 区段是唯一判定依据，所以不存在「点位指向一个不存在的组」这种事。
+    /// </summary>
+    private void RefreshTagGroups()
+    {
+        // 改 Group 会反过来触发 OnTagPropertyChanged，这里挡一下重入
+        if (_refreshingTagGroups)
+        {
+            return;
+        }
+
+        _refreshingTagGroups = true;
+        try
+        {
+            foreach (var tag in TagConfigs)
+            {
+                tag.Group = ResolveGroupName(tag.Address);
+            }
+        }
+        finally
+        {
+            _refreshingTagGroups = false;
+        }
+    }
+
+    private bool _refreshingTagGroups;
+
+    /// <summary>地址落在哪个区段；不在任何区段内返回空 —— 这种点位既不会采集也不会落库</summary>
+    private string ResolveGroupName(ushort address)
+    {
+        foreach (var group in Groups)
+        {
+            if (group.Covers(address))
+            {
+                return group.Name;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private void RefreshGroupNames()
+    {
+        GroupNames.Clear();
+        foreach (var group in Groups)
+        {
+            GroupNames.Add(group.Name);
+        }
+    }
+
+    /// <summary>交给采集循环的读取区段：只取真有点位的组，空区段读回来也没地方写</summary>
+    private IReadOnlyList<ReadRange> BuildReadRanges() =>
+        [.. _config.Groups
+            .Where(g => g.Count > 0 && TagConfigs.Any(t => g.Covers(t.Address)))
+            .OrderBy(g => g.StartAddress)
+            .Select(g => new ReadRange(g.StartAddress, g.Count))];
+
+    /// <summary>落在某个区段内的点位（区段是唯一的判定依据，不看点位上的归组缓存）</summary>
+    private List<PlcTag> TagsOfGroup(StorageGroup group) =>
+        [.. TagConfigs.Where(t => group.Covers(t.Address))];
+
+    /// <summary>不在任何区段内的点位数：这些点位不会被采集、也不会落库</summary>
+    private int CountUnassignedTags() => TagConfigs.Count(t => ResolveGroupName(t.Address).Length == 0);
+
+    [RelayCommand]
+    private void AddGroup()
+    {
+        int index = Groups.Count + 1;
+        while (Groups.Any(g => string.Equals(g.Name, $"组{index}", StringComparison.OrdinalIgnoreCase)))
+        {
+            index++;
+        }
+
+        // 新区段接在所有现有区段之后，默认 20 个寄存器（现场常见的一档）
+        int start = Groups.Count == 0 ? 0 : Groups.Max(g => g.EndAddress) + 1;
+        Groups.Add(new StorageGroup($"组{index}", $"PlcData{index}", StorageMode.Long, (ushort)start, 20));
+        SelectedGroup = Groups[^1];
+        StorageStatus = $"已新增组「组{index}」，区段 {Groups[^1].DisplayRange}：接着设目标表，并把区段改成本台设备实际的地址段";
+    }
+
+    [RelayCommand]
+    private void RemoveGroup()
+    {
+        if (SelectedGroup is null)
+        {
+            StorageStatus = "先选中要删除的组";
+            return;
+        }
+
+        if (Groups.Count <= 1)
+        {
+            StorageStatus = "至少要保留一个存储组";
+            return;
+        }
+
+        var removedName = SelectedGroup.Name;
+        int affected = TagsOfGroup(SelectedGroup).Count;
+        Groups.Remove(SelectedGroup);
+        SelectedGroup = Groups[0];
+
+        StorageStatus = affected > 0
+            ? $"已删除组「{removedName}」：原区段内的 {affected} 个点位现在显示为「未归组」，改成别的组的区段覆盖它们即可"
+            : $"已删除组「{removedName}」";
+    }
+
+    /// <summary>
+    /// 校验组表草稿：组名唯一非空、表名合法、一张表只归一个组、宽表别超列数上限。
+    /// 顺手把两端的空格去掉，后面就不用到处 Trim。
+    /// </summary>
+    private void ValidateGroups()
+    {
+        if (Groups.Count == 0)
+        {
+            throw new InvalidOperationException("至少要有一个存储组。");
+        }
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var tableOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var group in Groups)
+        {
+            group.Name = group.Name?.Trim() ?? string.Empty;
+            group.TableName = group.TableName?.Trim() ?? string.Empty;
+
+            if (group.Name.Length == 0)
+            {
+                throw new InvalidOperationException("组名不能为空。");
+            }
+
+            if (!names.Add(group.Name))
+            {
+                throw new InvalidOperationException($"组名「{group.Name}」重复：组名是区段的标识，必须唯一。");
+            }
+
+            if (group.Count == 0)
+            {
+                throw new InvalidOperationException($"组「{group.Name}」的区段长度是 0，至少要有 1 个寄存器。");
+            }
+
+            if (group.EndAddress > 65535)
+            {
+                throw new InvalidOperationException(
+                    $"组「{group.Name}」的区段超出地址范围：起始 {group.StartAddress} + {group.Count} 个，" +
+                    $"结束地址 {group.EndAddress} 超过 65535。");
+            }
+
+            DynamicTableStore.EnsureValidIdentifier(group.TableName, "表名");
+
+            // 两个组写同一张表，列和点位会互相打架（宽表尤其明显），直接拦下
+            if (tableOwners.TryGetValue(group.TableName, out var owner))
+            {
+                throw new InvalidOperationException($"表「{group.TableName}」同时被组「{owner}」和「{group.Name}」使用，请分开。");
+            }
+
+            tableOwners[group.TableName] = group.Name;
+
+            int tagCount = TagsOfGroup(group).Count;
+            if (group.Mode == StorageMode.Wide && tagCount > DynamicTableStore.MaxPointColumnsInWideTable)
+            {
+                throw new InvalidOperationException(
+                    $"组「{group.Name}」是宽表但有 {tagCount} 个点位，超过单表列数上限" +
+                    $"（{DynamicTableStore.MaxPointColumnsInWideTable} 个），请拆成多个组或改用长表。");
+            }
+        }
+
+        // 区段重叠会让同一个地址同时属于两个组：采集读两遍、落库写两张表，直接拦下
+        for (int i = 0; i < Groups.Count; i++)
+        {
+            for (int j = i + 1; j < Groups.Count; j++)
+            {
+                if (Groups[i].StartAddress <= Groups[j].EndAddress && Groups[j].StartAddress <= Groups[i].EndAddress)
+                {
+                    throw new InvalidOperationException(
+                        $"组「{Groups[i].Name}」（{Groups[i].DisplayRange}）和组「{Groups[j].Name}」" +
+                        $"（{Groups[j].DisplayRange}）的区段重叠了，同一个地址不能属于两个组。");
+                }
+            }
+        }
+    }
+
+    /// <summary>把界面上的组表草稿提交成生效配置并落盘</summary>
     private void CommitStorageMapping()
     {
-        _config.Storage.TableName = TableName.Trim();
-        _config.Storage.Mode = SelectedMode;
+        _config.Groups.Clear();
+        foreach (var group in Groups)
+        {
+            _config.Groups.Add(group.Clone());
+        }
+
         UpdateEffectiveStorageText();
         ConfigStore.Save(_config);
     }
 
     private void UpdateEffectiveStorageText()
     {
-        var modeText = _config.Storage.Mode == StorageMode.Wide ? "宽表" : "长表";
-        EffectiveStorageText = $"当前写入：{_config.Storage.TableName}（{modeText}）";
+        EffectiveStorageText = _config.Groups.Count == 0
+            ? "当前没有存储组"
+            : "当前写入：" + string.Join("　|　", _config.Groups.Select(g =>
+                $"{g.Name} {g.DisplayRange} → {g.TableName}（{(g.Mode == StorageMode.Wide ? "宽表" : "长表")}）"));
     }
 
+    /// <summary>建表语句预览：每个组一段，段首标出组名与点位数量</summary>
     private void UpdateScriptPreview()
     {
         try
         {
-            CreateScriptPreview = DynamicTableStore.BuildCreateScript(TableName, SelectedMode, TagConfigs);
+            var blocks = new List<string>();
+            foreach (var group in Groups)
+            {
+                var tags = TagsOfGroup(group);
+                blocks.Add($"-- 组「{group.Name}」→ 表 {group.TableName}（{tags.Count} 个点位）\r\n" +
+                           DynamicTableStore.BuildCreateScript(group.TableName, group.Mode, tags));
+            }
+
+            CreateScriptPreview = blocks.Count > 0 ? string.Join("\r\n\r\n", blocks) : "（还没有存储组）";
         }
         catch (Exception ex)
         {
@@ -730,39 +1039,31 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>建表（已存在则补列）：先按界面草稿建表，成功后才把映射提交生效</summary>
+    /// <summary>按组建表（已存在则补列）：先校验，全部建完才把组表提交生效</summary>
     [RelayCommand]
     private async Task CreateTableAsync()
     {
         try
         {
             StorageStatus = "处理中…";
+            ValidateGroups();
 
-            bool created = await _tableStore.CreateTableIfMissingAsync(TableName, SelectedMode, TagConfigs);
-            var sync = SelectedMode == StorageMode.Wide
-                ? await _tableStore.EnsureWideColumnsAsync(TableName, TagConfigs)
-                : new DynamicTableStore.WideColumnSyncResult([], [], []);
+            var notes = new List<string>();
+            foreach (var group in Groups)
+            {
+                var tags = TagsOfGroup(group);
+                bool created = await _tableStore.CreateTableIfMissingAsync(group.TableName, group.Mode, tags);
+                var sync = group.Mode == StorageMode.Wide
+                    ? await _tableStore.EnsureWideColumnsAsync(group.TableName, tags)
+                    : new DynamicTableStore.WideColumnSyncResult([], [], []);
+
+                notes.Add(DescribeGroupSync(group, tags.Count, created, sync));
+            }
 
             CommitStorageMapping();
             _ = RefreshTablesAsync();
 
-            StorageStatus = created ? $"已创建表 {TableName}" : $"表 {TableName} 已存在，结构已校验";
-            if (sync.Added.Count > 0)
-            {
-                StorageStatus += $"；补齐列：{string.Join("、", sync.Added)}";
-            }
-
-            if (sync.Relaxed.Count > 0)
-            {
-                StorageStatus += $"；改为可空（允许个别点位读失败）：{string.Join("、", sync.Relaxed)}";
-            }
-
-            if (sync.BlockingNotNull.Count > 0)
-            {
-                StorageStatus += $"；⚠ 表里这些非空列没人写，插入会失败，建议换新表名或把它们改成可空 / 删掉：" +
-                                 string.Join("、", sync.BlockingNotNull);
-            }
-
+            StorageStatus = string.Join("；", notes);
             await RefreshRecordsAsync();
         }
         catch (Exception ex)
@@ -771,16 +1072,252 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>把一个组的建表结果压成一句话</summary>
+    private static string DescribeGroupSync(
+        StorageGroup group, int tagCount, bool created, DynamicTableStore.WideColumnSyncResult sync)
+    {
+        var note = new StringBuilder($"组「{group.Name}」");
+        note.Append(created ? $"已创建表 {group.TableName}" : $"表 {group.TableName} 已存在，结构已校验");
+        note.Append($"（{tagCount} 个点位）");
+
+        if (sync.Added.Count > 0)
+        {
+            note.Append($"，补齐列：{string.Join("、", sync.Added)}");
+        }
+
+        if (sync.Relaxed.Count > 0)
+        {
+            note.Append($"，改为可空（允许个别点位读失败）：{string.Join("、", sync.Relaxed)}");
+        }
+
+        if (sync.BlockingNotNull.Count > 0)
+        {
+            note.Append($"；⚠ 表里这些非空列没人写，插入会失败，建议换新表名或把它们改成可空 / 删掉：" +
+                        string.Join("、", sync.BlockingNotNull));
+        }
+
+        return note.ToString();
+    }
+
+    // ---------------- 触发记录（握手模拟上升沿） ----------------
+
+    private void StartTriggerWatch()
+    {
+        if (_modbus is null || _triggerWatch is not null || !Triggers.Any(t => t.Enabled))
+        {
+            TriggerStatus = Triggers.Count == 0 ? "没有触发规则" : "触发规则全部停用";
+            return;
+        }
+
+        _triggerWatch = new TriggerWatchService(_modbus, [.. Triggers])
+        {
+            PollIntervalMs = TriggerPollIntervalMs
+        };
+        _triggerWatch.Triggered += OnTriggered;
+        _triggerWatch.HandshakeCompleted += OnHandshakeCompleted;
+        _triggerWatch.Alarm += OnTriggerAlarm;
+        _triggerWatch.Failed += OnAcquisitionFailed;
+        _triggerWatch.Start();
+
+        TriggerStatus = $"监听中：{Triggers.Count(t => t.Enabled)} 条规则 · {TriggerPollIntervalMs} ms 轮询";
+        _ = EnsureTriggerTableAsync();
+    }
+
+    private async Task StopTriggerWatchAsync()
+    {
+        var service = _triggerWatch;
+        if (service is null)
+        {
+            return;
+        }
+
+        _triggerWatch = null;
+        service.Triggered -= OnTriggered;
+        service.HandshakeCompleted -= OnHandshakeCompleted;
+        service.Alarm -= OnTriggerAlarm;
+        service.Failed -= OnAcquisitionFailed;
+        await service.StopAsync();
+        service.Dispose();
+
+        _stuckRules.Clear();
+        TriggerAlarm = string.Empty;
+        TriggerStatus = "未监听";
+    }
+
+    /// <summary>规则增删后要重启监听：监听循环用的是启动那一刻的规则快照</summary>
+    private async Task RestartTriggerWatchAsync()
+    {
+        if (_triggerWatch is null)
+        {
+            return;
+        }
+
+        await StopTriggerWatchAsync();
+        StartTriggerWatch();
+    }
+
+    private async Task EnsureTriggerTableAsync()
+    {
+        try
+        {
+            await _triggerStore.EnsureTableAsync(TriggerLogStore.DefaultTableName);
+            await RefreshTriggerRecordsAsync();
+        }
+        catch (Exception ex)
+        {
+            _ = _dispatcher.BeginInvoke(() => TriggerAlarm = $"触发记录表准备失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>该记一条记录了：先刷界面，落库丢到后台，别拖慢 100ms 的轮询</summary>
+    private void OnTriggered(TriggerRule rule, DateTime timestamp)
+    {
+        _dispatcher.BeginInvoke(() =>
+        {
+            TriggerCount++;
+            TriggerStatus = $"监听中：{Triggers.Count(t => t.Enabled)} 条规则 · 累计 {TriggerCount} 次 · " +
+                            $"最近「{rule.Name}」@ {timestamp:HH:mm:ss}";
+        });
+
+        _ = PersistTriggerAsync(rule, timestamp);
+    }
+
+    private async Task PersistTriggerAsync(TriggerRule rule, DateTime timestamp)
+    {
+        try
+        {
+            await _triggerStore.InsertAsync(TriggerLogStore.DefaultTableName, rule, timestamp);
+        }
+        catch (Exception ex)
+        {
+            _ = _dispatcher.BeginInvoke(() => TriggerAlarm = $"触发记录落库失败：{ex.Message}");
+        }
+    }
+
+    private void OnHandshakeCompleted(TriggerRule rule)
+    {
+        _dispatcher.BeginInvoke(() =>
+        {
+            _stuckRules.Remove(rule.Name);
+            UpdateTriggerAlarmText();
+        });
+    }
+
+    private void OnTriggerAlarm(TriggerRule rule, string message)
+    {
+        _dispatcher.BeginInvoke(() =>
+        {
+            _stuckRules.Add(rule.Name);
+            UpdateTriggerAlarmText();
+            TriggerStatus = message;      // 详细原因放状态栏，卡在哪条规则的「状态」列也能看到
+        });
+    }
+
+    /// <summary>报警条只列"哪几条规则卡住"，详细原因在状态栏与规则表的「状态」列</summary>
+    private void UpdateTriggerAlarmText()
+    {
+        TriggerAlarm = _stuckRules.Count == 0
+            ? string.Empty
+            : $"握手卡住：{string.Join("、", _stuckRules)} —— 等 PLC 清信号，未强行复位";
+    }
+
+    partial void OnTriggerPollIntervalMsChanged(int value)
+    {
+        if (_triggerWatch is not null)
+        {
+            _triggerWatch.PollIntervalMs = value;
+            TriggerStatus = $"监听中：轮询间隔已改为 {value} ms";
+        }
+    }
+
+    [RelayCommand]
+    private async Task AddTriggerRuleAsync()
+    {
+        int index = Triggers.Count + 1;
+        while (Triggers.Any(t => string.Equals(t.Name, $"触发{index}", StringComparison.OrdinalIgnoreCase)))
+        {
+            index++;
+        }
+
+        var rule = new TriggerRule($"触发{index}", 0, 0);
+        Triggers.Add(rule);
+        SelectedTrigger = rule;
+        ConfigStore.Save(_config);
+        await RestartTriggerWatchAsync();
+
+        TriggerStatus = $"已新增规则「{rule.Name}」：把信号/应答地址改成现场实际地址（0 基协议地址）";
+    }
+
+    [RelayCommand]
+    private async Task RemoveTriggerRuleAsync(IList? selectedRows)
+    {
+        // SelectedItems 是活集合，先快照再删
+        var targets = selectedRows?.OfType<TriggerRule>().ToList() ?? [];
+        if (targets.Count == 0)
+        {
+            TriggerStatus = "没有选中规则";
+            return;
+        }
+
+        foreach (var rule in targets)
+        {
+            Triggers.Remove(rule);
+        }
+
+        ConfigStore.Save(_config);
+        await RestartTriggerWatchAsync();
+        TriggerStatus = $"已删除 {targets.Count} 条触发规则";
+    }
+
+    [RelayCommand]
+    private void SaveTriggerRules()
+    {
+        try
+        {
+            ConfigStore.Save(_config);
+            TriggerStatus = $"触发规则已保存：{ConfigStore.FilePath}";
+        }
+        catch (Exception ex)
+        {
+            TriggerStatus = $"保存失败：{ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task RefreshTriggerRecordsAsync()
+    {
+        try
+        {
+            var data = await _triggerStore.QueryRecentAsync(TriggerLogStore.DefaultTableName, RecentRecordCount);
+            TriggerView = data.DefaultView;
+            TriggerRecordsInfo =
+                $"最近 {data.Rows.Count} 条 · 表 {TriggerLogStore.DefaultTableName} · 更新于 {DateTime.Now:HH:mm:ss}";
+        }
+        catch (Exception ex)
+        {
+            TriggerRecordsInfo = $"读取触发记录失败：{ex.Message}";
+        }
+    }
+
     // ---------------- 记录查询 ----------------
 
     [RelayCommand]
     private async Task RefreshRecordsAsync()
     {
+        // 预览选中的那个组；没选就预览第一个
+        var target = SelectedGroup ?? Groups.FirstOrDefault();
+        if (target is null)
+        {
+            RecentView = null;
+            RecordsInfo = "还没有存储组";
+            return;
+        }
+
         try
         {
-            var data = await _tableStore.QueryRecentAsync(_config.Storage.TableName, RecentRecordCount);
+            var data = await _tableStore.QueryRecentAsync(target.TableName.Trim(), RecentRecordCount);
             RecentView = data.DefaultView;
-            RecordsInfo = $"最近 {data.Rows.Count} 条 · 表 {_config.Storage.TableName} · 更新于 {DateTime.Now:HH:mm:ss}";
+            RecordsInfo = $"组「{target.Name}」· 表 {target.TableName} · 最近 {data.Rows.Count} 条 · 更新于 {DateTime.Now:HH:mm:ss}";
         }
         catch (Exception ex)
         {
@@ -793,6 +1330,7 @@ public partial class MainViewModel : ObservableObject
         _recordTimer.Stop();
         _scanCts?.Cancel();
         _acquisition?.Dispose();
+        _triggerWatch?.Dispose();
         _modbus?.Dispose();
     }
 }

@@ -14,6 +14,18 @@ internal sealed class DeviceProfile
     /// <summary>开放的保持寄存器数量：协议地址 0 ~ RegisterCount-1</summary>
     public required int RegisterCount { get; init; }
 
+    /// <summary>
+    /// 会被每秒刷新的数据区寄存器数量；握手区排在数据区之后，由 <see cref="HandshakeDevice"/> 单独维护，
+    /// 不会被每秒刷新冲掉。不填就等于整个 RegisterCount 都是数据区。
+    /// </summary>
+    public int? DataRegisterCount { get; init; }
+
+    /// <summary>握手测试设备的信号/应答约定；不填表示这台设备不参与握手</summary>
+    public HandshakeSpec? Handshake { get; init; }
+
+    /// <summary>每秒刷新的数据区大小</summary>
+    public int DataCount => DataRegisterCount ?? RegisterCount;
+
     /// <summary>点位说明，启动时打印出来，方便照着扫描</summary>
     public required string Map { get; init; }
 
@@ -67,6 +79,22 @@ internal sealed class DeviceProfile
                 v[2] = (ushort)((long)t * 2);                     // 累计电耗
                 v[3] = (ushort)((long)t % 30 == 0 ? 1 : 0);       // 报警字，偶尔置 1
             }
+        },
+        // 握手测试设备：模拟「热封/冲压来了一个信号 → 上位机记一条 → 握手复位」的现场时序。
+        // 数据区 0~19 每秒刷新；20/21 是握手区，由 HandshakeDevice 自己维护，不会被刷新冲掉。
+        new DeviceProfile
+        {
+            UnitId = 4,
+            Name = "4# 握手测试",
+            RegisterCount = 24,
+            DataRegisterCount = 20,
+            Map = "0~19=数据区(每秒刷新) 20=信号(本设备置1) 21=应答(上位机置1) 22~23=未使用",
+            Fill = (t, v) =>
+            {
+                v[0] = (ushort)((long)t * 3 % 1000);     // 随便给点变化的数，用来对触发时刻的记录
+                v[1] = (ushort)((long)t * 7 % 1000);
+            },
+            Handshake = new HandshakeSpec(SignalAddress: 20, AckAddress: 21, IntervalMs: 500)
         }
     ];
 }

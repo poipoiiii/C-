@@ -25,6 +25,29 @@ public partial class PlcTag : ObservableObject
     [ObservableProperty] private string _columnName = "点位";
 
     /// <summary>
+    /// 归到哪个存储组：由点位地址落在哪个区段决定（见 MainViewModel.RefreshTagGroups）。
+    /// 只是运行期的展示值，不写进配置文件 —— 区段才是唯一权威。
+    /// 空字符串表示不在任何区段内：这种点位既不会被采集，也不会落库。
+    /// </summary>
+    [JsonIgnore]
+    public string Group
+    {
+        get => _group;
+        set
+        {
+            if (SetProperty(ref _group, value))
+            {
+                OnPropertyChanged(nameof(GroupText));
+            }
+        }
+    }
+
+    private string _group = string.Empty;
+
+    /// <summary>点位表里的归组展示：没落到任何区段时明说，免得看起来像已归组</summary>
+    public string GroupText => string.IsNullOrEmpty(Group) ? "未归组" : Group;
+
+    /// <summary>
     /// 改「名称」时同步「宽表列名」——只有列名没被单独改过（仍等于旧名称）才跟着变。
     /// 常规用法下改一次名称就够了；单独调过列名的场景不会被覆盖。
     /// </summary>

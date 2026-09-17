@@ -8,7 +8,7 @@ public partial class App : Application
 {
     protected override void OnStartup(StartupEventArgs e)
     {
-        // 数据库连接配置：.env 在仓库根目录，从运行目录向上查找（与 PlcDataCollector 一致）
+        // 数据库连接配置：.env 在仓库根目录，从运行目录向上查找
         try
         {
             Env.TraversePath().Load();

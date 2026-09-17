@@ -3,7 +3,7 @@ using System.Data.Common;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
-using PlcDataCollector.Data;
+using PlcCore.Data;
 using PlcHmi.Models;
 
 namespace PlcHmi.Services;
@@ -22,6 +22,12 @@ public sealed class DynamicTableStore
     /// <summary>长表固定列</summary>
     private static readonly string[] LongColumns =
         ["Timestamp", "RegisterAddress", "RawValue", "EngineeringValue"];
+
+    /// <summary>
+    /// 宽表能放多少个点位列：SQL Server 单表列数上限 1024，扣掉 Id 和 Timestamp（长表切换过来时
+    /// 还会留着 RegisterAddress/RawValue/EngineeringValue，所以这里按更紧的算法给上限）。
+    /// </summary>
+    public const int MaxPointColumnsInWideTable = 1022;
 
     public static void EnsureValidIdentifier(string name, string what)
     {
@@ -195,6 +201,12 @@ public sealed class DynamicTableStore
         return new WideColumnSyncResult(added, relaxed, blocking);
     }
 
+    /// <summary>
+    /// 长表单条 INSERT 最多带多少行：SQL Server 单命令参数上限 2100，每行 4 个参数 → 理论 525 行，
+    /// 这里取 200 留余量。点位规模到几百个时，一次采完整批就会撞上限，必须切段。
+    /// </summary>
+    private const int MaxRowsPerInsert = 200;
+
     /// <summary>长表写入：一行一个点位</summary>
     public async Task InsertLongAsync(string table, IReadOnlyList<Sample> batch)
     {
@@ -204,28 +216,40 @@ public sealed class DynamicTableStore
             return;
         }
 
-        var sql = new StringBuilder($"INSERT INTO {Quote(table)} ([Timestamp],[RegisterAddress],[RawValue],[EngineeringValue]) VALUES ");
         await using var db = new AppDbContext();
         var connection = await OpenAsync(db);
-        await using var command = connection.CreateCommand();
 
-        for (int i = 0; i < batch.Count; i++)
+        // 切段写但放在一个事务里：保持「一批要么全进、要么全不进」的语义，不留下半批数据
+        await using var transaction = await connection.BeginTransactionAsync();
+
+        for (int offset = 0; offset < batch.Count; offset += MaxRowsPerInsert)
         {
-            var sample = batch[i];
-            if (i > 0)
+            int count = Math.Min(MaxRowsPerInsert, batch.Count - offset);
+            var sql = new StringBuilder(
+                $"INSERT INTO {Quote(table)} ([Timestamp],[RegisterAddress],[RawValue],[EngineeringValue]) VALUES ");
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+
+            for (int i = 0; i < count; i++)
             {
-                sql.Append(',');
+                var sample = batch[offset + i];
+                if (i > 0)
+                {
+                    sql.Append(',');
+                }
+
+                sql.Append($"(@t{i},@a{i},@r{i},@e{i})");
+                AddParameter(command, $"@t{i}", sample.Timestamp);
+                AddParameter(command, $"@a{i}", (int)sample.Tag.Address);
+                AddParameter(command, $"@r{i}", sample.RawValue);
+                AddParameter(command, $"@e{i}", sample.EngineeringValue);
             }
 
-            sql.Append($"(@t{i},@a{i},@r{i},@e{i})");
-            AddParameter(command, $"@t{i}", sample.Timestamp);
-            AddParameter(command, $"@a{i}", (int)sample.Tag.Address);
-            AddParameter(command, $"@r{i}", sample.RawValue);
-            AddParameter(command, $"@e{i}", sample.EngineeringValue);
+            command.CommandText = sql.ToString();
+            await command.ExecuteNonQueryAsync();
         }
 
-        command.CommandText = sql.ToString();
-        await command.ExecuteNonQueryAsync();
+        await transaction.CommitAsync();
     }
 
     /// <summary>宽表写入：一行一个时刻，点位成列</summary>
@@ -274,7 +298,10 @@ public sealed class DynamicTableStore
         return table2;
     }
 
-    private static async Task<DbConnection> OpenAsync(AppDbContext db)
+    // 下面三个是拼 SQL 的工具方法。internal 是为了让 TriggerLogStore 复用同一份
+    // 标识符转义逻辑 —— 转义规则散成两份迟早会走偏。
+
+    internal static async Task<DbConnection> OpenAsync(AppDbContext db)
     {
         var connection = db.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)
@@ -285,7 +312,7 @@ public sealed class DynamicTableStore
         return connection;
     }
 
-    private static void AddParameter(DbCommand command, string name, object value)
+    internal static void AddParameter(DbCommand command, string name, object value)
     {
         var parameter = command.CreateParameter();
         parameter.ParameterName = name;
@@ -293,5 +320,6 @@ public sealed class DynamicTableStore
         command.Parameters.Add(parameter);
     }
 
-    private static string Quote(string identifier) => "[" + identifier.Replace("]", "]]") + "]";
+    /// <summary>标识符转义：[ ] 包裹并把内部的 ] 转义成 ]]</summary>
+    internal static string Quote(string identifier) => "[" + identifier.Replace("]", "]]") + "]";
 }

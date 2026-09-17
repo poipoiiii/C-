@@ -1,5 +1,5 @@
 using NModbus;
-using PlcDataCollector.Services;
+using PlcCore.Services;
 using PlcHmi.Models;
 
 namespace PlcHmi.Services;

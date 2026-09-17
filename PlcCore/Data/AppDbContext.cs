@@ -1,7 +1,7 @@
 using Microsoft.EntityFrameworkCore;
-using PlcDataCollector.Models;
+using PlcCore.Models;
 
-namespace PlcDataCollector.Data;
+namespace PlcCore.Data;
 
 /// <summary>
 /// EF Core 数据库上下文（Code First）
