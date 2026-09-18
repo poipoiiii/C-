@@ -43,8 +43,8 @@
             <TextBlock Grid.Row="2" Grid.Column="0" Text="从站号" Style="{StaticResource FieldLabel}" />
             <DockPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,12">
                 <Button DockPanel.Dock="Right" Content="探测从站" Width="92" Height="32" Margin="8,0,0,0"
-                        Command="{Binding ProbeSlavesCommand}"
-                        ToolTip="按上面的 IP/端口探一遍，把探测到的从站号自动填进来" />
+                        IsEnabled="{Binding IsProbeIdle}" Click="Probe_Click"
+                        ToolTip="按上面框里当前的 IP/端口探一遍，把探测到的从站号自动填进来" />
                 <TextBox x:Name="SlaveIdBox" Height="32" VerticalContentAlignment="Center"
                          Text="{Binding SlaveIdText, Mode=OneWay}"
                          ToolTip="1~247；点【探测从站】可自动填充" />

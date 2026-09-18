@@ -48,6 +48,32 @@ public partial class PlcConfigWindow : Window
         };
     }
 
+    /// <summary>
+    /// 【探测从站】：IP/端口这两个框没有绑定，探测读的是视图模型里的参数，
+    /// 所以先把框里的当前值校验并写回视图模型，本次探测才会用刚填的地址
+    /// （否则探的还是上次【确定】过的那个，改了 IP 也没用）。
+    /// </summary>
+    private void Probe_Click(object sender, RoutedEventArgs e)
+    {
+        string ip = IpBox.Text.Trim();
+        if (ip.Length == 0)
+        {
+            ShowError("PLC IP 不能为空");
+            return;
+        }
+
+        if (!int.TryParse(PortBox.Text.Trim(), out int port) || port < 1 || port > 65535)
+        {
+            ShowError("端口应为 1~65535 的整数");
+            return;
+        }
+
+        ErrorText.Visibility = Visibility.Collapsed;
+        _viewModel.Ip = ip;
+        _viewModel.Port = port;
+        _viewModel.ProbeSlavesCommand.Execute(null);
+    }
+
     /// <summary>确定：先校验输入，再把参数写回视图模型（写回后按需触发重连）</summary>
     private void Ok_Click(object sender, RoutedEventArgs e)
     {

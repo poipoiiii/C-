@@ -187,7 +187,7 @@ c_Test/
 # 终端 1：仿真 PLC（127.0.0.1:5020，从站 1~5 = 五种机台、从站 6 = 握手测试）
 dotnet run --project PlcSimulator\PlcSimulator.csproj
 
-# 终端 2：上位机界面（默认已填 127.0.0.1:5020，点【连接】→【开始采集】）
+# 终端 2：上位机界面（默认已填现场 PLC 192.168.1.88:502；连仿真器时改成 127.0.0.1:5020，点【连接】→【开始采集】）
 dotnet run --project PlcHmi\PlcHmi.csproj
 ```
 

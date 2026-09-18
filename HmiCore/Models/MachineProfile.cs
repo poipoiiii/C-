@@ -17,9 +17,9 @@ public sealed class MachineProfile
     /// </summary>
     public string Profile { get; set; } = "";
 
-    public string Ip { get; set; } = "127.0.0.1";
+    public string Ip { get; set; } = "192.168.1.88";
 
-    public int Port { get; set; } = 5020;
+    public int Port { get; set; } = 502;
 
     public byte SlaveId { get; set; } = 1;
 

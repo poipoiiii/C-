@@ -31,8 +31,8 @@ public sealed class ConnectionController : ObservableObject, IDisposable
         _machine = machine;
     }
 
-    private string _ip = "127.0.0.1";
-    private int _port = 5020;
+    private string _ip = "192.168.1.88";
+    private int _port = 502;
     private byte _slaveId = 1;
     private int _intervalMs = 1000;
 

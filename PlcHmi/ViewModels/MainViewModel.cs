@@ -24,7 +24,7 @@ public partial class MainViewModel : ObservableObject
 {
     /// <summary>从站探测范围（协议里 UnitId 是 0~247，0 一般作广播，现场多从 1 开始且很少超过 32）</summary>
     private const byte ProbeStartId = 1;
-    private const byte ProbeEndId = 32;
+    private const byte ProbeEndId = 10;
 
     /// <summary>单个从站的探测超时：短一点，避免探测一轮等太久</summary>
     private const int ProbeTimeoutMs = 400;
@@ -578,6 +578,14 @@ public partial class MainViewModel : ObservableObject
     private bool _isProbing;
 
     private bool CanProbeSlaves() => !IsProbing;
+
+    /// <summary>
+    /// 探测按钮能否点：配置弹窗的【探测从站】走点击事件（要先取输入框当前值），
+    /// 拿不到命令的 CanExecute，所以这里单独给界面一个可绑的开关。
+    /// </summary>
+    public bool IsProbeIdle => !IsProbing;
+
+    partial void OnIsProbingChanged(bool value) => OnPropertyChanged(nameof(IsProbeIdle));
 
     /// <summary>探测同一 IP:端口 下有哪些从站号在响应，结果填进从站号框（配置弹窗的【探测从站】）</summary>
     [RelayCommand(CanExecute = nameof(CanProbeSlaves))]
