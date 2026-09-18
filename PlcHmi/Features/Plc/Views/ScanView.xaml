@@ -51,9 +51,14 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <controls:SectionHeader Grid.Row="0" Title="扫描结果"
-                                            Hint="地址可填 40001 这类人读地址；32/64 位量需先勾选加入点位表，再在右侧合并（扫描仅识别 16 位寄存器，无法判断哪两个寄存器构成一个浮点）" />
+                                            Hint="地址可填 40001 这类人读地址；「浮点预览」把本行与下一个寄存器拼成 32 位浮点，配「预览字序」挨个试，认出哪两个寄存器是一个浮点，再勾选加入点位表、在右侧按同一字序合并" />
                     <WrapPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-                        <Button Content="全选可读" Command="{Binding SelectAllReadableCommand}" Width="88" />
+                        <ComboBox Width="180" hc:InfoElement.Title="预览字序" hc:InfoElement.TitlePlacement="Left"
+                                  ItemsSource="{Binding WordOrderOptions}" DisplayMemberPath="Display"
+                                  SelectedValuePath="Value" SelectedValue="{Binding PreviewWordOrder}"
+                                  ToolTip="只影响「浮点预览」这一列怎么看，不改点位配置" />
+                        <Button Content="全选可读" Command="{Binding SelectAllReadableCommand}" Width="88"
+                                Margin="8,0,0,0" />
                         <Button Content="加入点位表" Command="{Binding AddSelectedScanResultsCommand}"
                                 Style="{StaticResource ButtonSuccess}" Width="100" Margin="8,0,0,0" />
                     </WrapPanel>
@@ -70,6 +75,11 @@
                                             ElementStyle="{StaticResource CellNumber}" />
                         <DataGridTextColumn Header="原始值" Width="120" IsReadOnly="True"
                                             Binding="{Binding RawText}"
+                                            ElementStyle="{StaticResource CellNumber}" />
+                        <!-- 浮点预览：本行与下一个寄存器拼成 32 位浮点（字序看上面那个下拉），
+                             帮现场认出哪两个寄存器是一个浮点；不给采集用，只是看一眼 -->
+                        <DataGridTextColumn Header="浮点预览" Width="130" IsReadOnly="True"
+                                            Binding="{Binding FloatPreview}"
                                             ElementStyle="{StaticResource CellNumber}" />
                         <DataGridTemplateColumn Header="状态" Width="*" IsReadOnly="True">
                             <DataGridTemplateColumn.CellTemplate>

@@ -1,3 +1,41 @@
+2026-09-18  修长时间空闲后卡死（主连接无超时）；扫描侧新增浮点预览
+
+【现象与根因】
+- 现场：长时间连接无操作后程序卡死、点不动，最终"未响应"退出
+- 实测（PlcTests/ModbusServiceTests 用"只接受连接、永不回数据"的静默从站复现）：
+  NModbus Transport.ReadTimeout/WriteTimeout 默认 -1（无限等）、Retries 默认 3，TcpClient 收发超时默认 0，
+  于是"线还在、对面不响了"时一次读**永久挂住**（实测 6 秒仍不返回）
+- 卡死链条：卡住的读握着 ModbusService 的连接级互斥 → 采集循环停住（界面不再刷新、点【停止采集】
+  【断开】永远等不完）→ 关窗口时 Dispose 里的 _gate.Wait() 在界面线程上无限等 → Windows 判定"无响应"
+
+【变更 · HmiCore/Comm/ModbusService.cs】
+- 读写各设 1 秒上限（IoTimeoutMs）：socket 层 ReceiveTimeout/SendTimeout + NModbus 层 Read/WriteTimeout 都设
+- Transport.Retries 3 → 0（TCP 不重试：同一个动作重复三遍只会把"无响应"拖得更久）
+- 建链改带超时的 ConnectAsync + WaitAny 上限 3 秒（原来同步 Connect 无上限，IP 写错要冻 20 秒以上）
+- Dispose：先关 socket（让卡住的读立刻以异常退出）→ 引用清空 → 限时取锁（最多 1 秒），绝不无限等；
+  不再 Dispose 信号量（可能有线程在等它，Dispose 后再 Release 会抛 ObjectDisposedException）
+- 超时/断线统一换成能照做的中文提示：与 PLC 通信中断（1000 ms 内无响应或链路已断）：检查网线与设备，
+  必要时断开重连。
+
+【新增 · 扫描侧浮点预览（现场反馈"PLC 写的是浮点 0.1，读出来是 -13107 与 15820"）】
+- Models/PlcValueCodec.cs：新增 PreviewFloat32（本行 + 下一个寄存器按 32 位浮点解码，G7 显示，
+  0.1 不会显示成 0.100000001490116）
+- Models/ScanResult.cs：新增 FloatPreview（地址不连续或读不到时 "--"，只给人看，不参与采集）
+- ScanViewModel：新增 PreviewWordOrder + RefreshFloatPreview（扫完与换字序时重算）
+- ScanView.xaml：扫描结果新增「浮点预览」列 + 工具栏「预览字序」下拉；更新页头提示
+- 现场那组数字的结论：0.1f = 0x3DCCCCCD，低字 0xCCCD 在前 → 该设备是**低字在前 CDAB**
+
+【验证】
+- PlcTests/ModbusServiceTests.cs（新增）：静默从站下读操作 1 秒内失败（原来永久挂住）；
+  Dispose 不再被卡住的读拖住（实测 119 ms）
+- PlcTests/PlcValueCodecTests.cs：新增现场实测用例（-13107 / 15820 → 低字在前解出 0.1）
+- dotnet build c_Test.sln：0 警告 0 错误；dotnet test：165 个用例全通过
+- 文档同步：AGENTS.md 硬约束新增第 7 条（主连接必须带超时）、README 采集点位页说明补浮点预览
+
+【遗留】
+- 传输层故障现在快速失败并上报，但仍不会自动重连（P4）：现场需手动断开重连
+- 未在真 PLC 上验证字序结论（本地仿真器只供 16 位整数，看不出浮点效果）
+
 2026-09-18  新增 AGENTS.md：项目记忆（分层约定 / 导航表 / 硬约束 / 坑与现状）
 
 【新增】

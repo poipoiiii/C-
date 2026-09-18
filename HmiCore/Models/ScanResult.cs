@@ -10,6 +10,14 @@ public partial class ScanResult : ObservableObject
 {
     [ObservableProperty] private bool _isSelected;
 
+    /// <summary>
+    /// 浮点预览：本行与紧跟它的下一个寄存器拼成一个 32 位浮点显示（字序由界面上的下拉决定）。
+    /// 现场 PLC 常把浮点写成两个连续寄存器，这一列帮着认出哪两个是一个浮点、该用哪种字序；
+    /// 只是给人看的提示，不参与采集 —— 采集用点位表里那个点位的类型与字序。
+    /// 地址不连续、或有一边读不到时为 "--"。
+    /// </summary>
+    [ObservableProperty] private string _floatPreview = "--";
+
     public ScanResult(ushort address, short? rawValue, string status)
     {
         Address = address;

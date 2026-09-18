@@ -55,6 +55,29 @@ public class PlcValueCodecTests
         Assert.Equal(-2.5, PlcValueCodec.Decode([0xC020, 0x0000], PlcDataType.Float32, WordOrder.HighWordFirst), 6);
     }
 
+    /// <summary>
+    /// 现场实测数据：PLC 那侧写的就是浮点 0.1，上位机扫描却只看得见两个 16 位寄存器
+    /// （前一个 -13107、后一个 15820）—— 按 0.1f = 0x3DCCCCCD 拆开对，正好是
+    /// 低字 0xCCCD 在前、高字 0x3DCC 在后，也就是**低字在前**（三菱 D 寄存器的常见放法）。
+    /// 这条用例照现场的原始数字钉住：以后动字序逻辑，先看它有没有被弄坏。
+    /// </summary>
+    [Fact]
+    public void 现场实测_低字在前的0_1浮点()
+    {
+        short first = unchecked((short)0xCCCD);   // 现场看到：负一万三千多
+        short second = unchecked((short)0x3DCC);  // 现场看到：一万五千多
+        Assert.Equal(-13107, first);
+        Assert.Equal(15820, second);
+
+        ushort[] registers = [unchecked((ushort)first), unchecked((ushort)second)];
+
+        Assert.Equal(0.1, PlcValueCodec.Decode(registers, PlcDataType.Float32, WordOrder.LowWordFirst), 6);
+        Assert.Equal("0.1", PlcValueCodec.PreviewFloat32(registers[0], registers[1], WordOrder.LowWordFirst));
+
+        // 字序选错就不是 0.1 了 —— 现场"读出来是乱数"就是这么来的，得在四种字序里挨个试
+        Assert.NotEqual("0.1", PlcValueCodec.PreviewFloat32(registers[0], registers[1], WordOrder.HighWordFirst));
+    }
+
     [Fact]
     public void 三十二位整数_有符号与无符号()
     {

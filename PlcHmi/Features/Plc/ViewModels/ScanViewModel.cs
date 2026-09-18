@@ -71,6 +71,34 @@ public partial class ScanViewModel : ObservableObject
     /// <summary>合并出来的点位用哪种字序，合并后还能单独改</summary>
     [ObservableProperty] private WordOrder _mergeWordOrder = WordOrder.HighWordFirst;
 
+    /// <summary>
+    /// 扫描结果里「浮点预览」用哪种字序。改它只是换个看法，不动任何点位配置 ——
+    /// 现场找不准字序时，就在这里挨个试：哪个字序下预览读出来是合理的数，点位就按那个建。
+    /// </summary>
+    [ObservableProperty] private WordOrder _previewWordOrder = WordOrder.HighWordFirst;
+
+    partial void OnPreviewWordOrderChanged(WordOrder value) => RefreshFloatPreview();
+
+    /// <summary>
+    /// 重算每一行的浮点预览：本行 + 下一个寄存器拼成 32 位浮点。
+    /// 下一个寄存器不存在、地址不连续、或有一边读不到时给 "--"。
+    /// </summary>
+    private void RefreshFloatPreview()
+    {
+        for (int i = 0; i < ScanResults.Count; i++)
+        {
+            var current = ScanResults[i];
+            var next = i + 1 < ScanResults.Count ? ScanResults[i + 1] : null;
+
+            current.FloatPreview = current.RawValue is { } first
+                && next is { RawValue: { } second }
+                && next.Address == current.Address + 1
+                    ? PlcValueCodec.PreviewFloat32(
+                        unchecked((ushort)first), unchecked((ushort)second), PreviewWordOrder)
+                    : "--";
+        }
+    }
+
     /// <summary>可编辑的采集点位表（直接就是配置对象里的集合）</summary>
     public ObservableCollection<PlcTag> TagConfigs => _shell.Config.Tags;
 
@@ -119,6 +147,8 @@ public partial class ScanViewModel : ObservableObject
             {
                 ScanResults.Add(result);
             }
+
+            RefreshFloatPreview();
 
             int readable = results.Count(r => r.IsReadable);
             ScanStatus = $"扫描完成：共 {results.Count} 个地址，可读 {readable} 个，读异常 {results.Count - readable} 个";

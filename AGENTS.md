@@ -33,8 +33,10 @@ Modbus TCP 读 PLC 保持寄存器 → `工程值 = 原始值 × Scale + Offset`
 4. 点位归组由地址落在哪个区段决定，`Group/GroupText` 仅展示、`[JsonIgnore]` 不写配置；存储组界面是草稿，点【建表/校验】才生效；切从站 = 重连（slaveId 构造时固定）。**点位可占多个寄存器**（32 位 2 个 / 64 位 4 个）：宽度看 `PlcTag.DataType`、字序看 `PlcTag.WordOrder`，解码只在 `Models/PlcValueCodec.cs`；判定归属/落库一律用整段（`StorageGroup.CoversRange(tag.Address, tag.EndAddress)`），多寄存器点位要整段在区段内。**同一个寄存器只算一个点位**（`Models/TagLayout.cs`：按起始地址靠前、占得更宽的那个算），被盖住的点位只在「占用」列标红 —— 它是那个大数的半截字节，采集、落库、建表都跳过它（表里一个数据一列）。
 5. 配置三份：`PlcHmi/Templates/<代号>.json`（随包只读）→ `data/configs/<代号>.json`（现场副本）→ `data/machine.json`（机台号+连接参数+当前机型）；`data/*`、`publish/`、`.env` 不入库。
 6. 新功能：逻辑进 HmiCore 新目录，界面进 `Features/<功能>/{Views,ViewModels}`，不要往 MainViewModel 堆字段。
+7. 主连接**必须带超时**：`ModbusService` 的读写上限 1s（`IoTimeoutMs`，socket 层 + NModbus 层都设）、`Retries = 0`、建链上限 3s；`Dispose` 先关 socket 再**限时**取锁，不许无限等。NModbus 默认 `ReadTimeout/WriteTimeout = -1`（无限等）、`Retries = 3`，TcpClient 默认也不超时 —— 少一条，设备一不响就会永久挂住那次读，而它握着连接级互斥，界面线程上的断开/换从站/退出会一起卡死（表现为"程序无响应"）。见 `PlcTests/ModbusServiceTests.cs`。
 
 ## 坑与现状
 - 宽表：缺点位列 → ALTER ADD，点位列 NOT NULL → 放宽 NULL；表内**非空且不属于当前点位的列 = 阻断列**，插入必失败。
 - 长表插入按 200 行切段 + 单事务（绕 2100 参数上限）；采集只捕 `SlaveException`，传输层异常整轮作废、整段失败回退段内逐点读（多寄存器点位按整段重读）；采集拆 125 寄存器上限的小段时**不切开点位**；长表 `RawValue` 是 FLOAT（老表是 SMALLINT 的要 `ALTER COLUMN [RawValue] FLOAT NOT NULL`）；界面某格空白不报错 → 查 `data/logs/plc-<日期>.log` 的 `WPF 绑定：` 警告。
 - 现状：P1 区段分组分表、P2 采集落库性能、触发记录、附加列 + 机台号 已完成；P3 写线圈部分完成（缺写点面板 / 白名单 / 审计）；P4 自动重连、P5 报警未做；`Features/Aoi/` 空占位。改动追加记录到 `update.md`。
+- 传输层故障（超时/断线）现在**快速失败并上报**，但**不会自动重连**：现场表现是顶栏标红"与 PLC 通信中断"，需要手动断开重连（P4 未做）。

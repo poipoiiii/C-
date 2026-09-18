@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace HmiCore.Models;
 
 /// <summary>
@@ -120,6 +122,14 @@ public static class PlcValueCodec
             _ => throw new ArgumentOutOfRangeException(nameof(type), type, "未知数据类型")
         };
     }
+
+    /// <summary>
+    /// 扫描预览：把本行这一个寄存器与紧跟它的下一个拼成 32 位浮点显示出来。
+    /// 现场 PLC 把浮点写成两个连续寄存器，而扫描结果里只看得见一个个 16 位寄存器，
+    /// 有了这一列，配上字序下拉就能一眼认出「哪两个寄存器是一个浮点、该用哪种字序」。
+    /// </summary>
+    public static string PreviewFloat32(ushort first, ushort second, WordOrder order) =>
+        Decode([first, second], PlcDataType.Float32, order).ToString("G7", CultureInfo.InvariantCulture);
 
     /// <summary>把 16 位字整体倒过来（32 位两个、64 位四个）</summary>
     private static void SwapWords(Span<byte> bytes)

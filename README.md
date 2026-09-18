@@ -242,7 +242,7 @@ dotnet test          # 根目录执行，走 c_Test.sln，跑 PlcTests
 | 页签 | 内容控件 | 干什么 |
 |---|---|---|
 | 实时看板 | [DashboardView](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/Views/DashboardView.xaml) | 每点位一张卡片（大数字 + 原始值 + 60 点滚动曲线），按存储组分段、每段可折叠；点卡片里的曲线弹出「表记录历史」窗 |
-| 采集点位 | [ScanView](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/Views/ScanView.xaml) | 扫描寄存器 → 勾选【加入点位表】→ 在点位表里**选中相邻几行点【合并为点位】**（32/64 位量占多个寄存器；扫描侧只看得见 16 位寄存器，认不出哪两个是一个浮点，所以类型/字序在点位表这侧定）→ 编辑名称/类型/字序/单位/Scale/Offset/宽表列名；选错了用【拆开多寄存器】改回来。**字序只对 32/64 位点位显示**；**同一个寄存器只算一个点位**：重叠时按"起始地址靠前、占得更宽"的那个算（见 [TagLayout.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Models/TagLayout.cs)），被压住的那些在「占用」列标红、类型被锁住，而且**不采集、表里也不出列** —— 一个数据一列 |
+| 采集点位 | [ScanView](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/Views/ScanView.xaml) | 扫描寄存器 → 勾选【加入点位表】→ 在点位表里**选中相邻几行点【合并为点位】**（32/64 位量占多个寄存器；扫描结果里「浮点预览」列把本行与下一个寄存器拼成 32 位浮点、旁边「预览字序」下拉可以挨个试，用来认出**哪两个寄存器是一个浮点、该用哪种字序** —— 那只是给人看的提示，真正的类型/字序仍然定在点位表这一侧）→ 编辑名称/类型/字序/单位/Scale/Offset/宽表列名；选错了用【拆开多寄存器】改回来。**字序只对 32/64 位点位显示**；**同一个寄存器只算一个点位**：重叠时按"起始地址靠前、占得更宽"的那个算（见 [TagLayout.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Models/TagLayout.cs)），被压住的那些在「占用」列标红、类型被锁住，而且**不采集、表里也不出列** —— 一个数据一列 |
 | 存储映射 | [StorageView](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/Views/StorageView.xaml) | 选目标表与长表/宽表 → 预览建表语句 → 建表/校验结构；组表与建表预览之间的分隔条可上下拖动调高 |
 | 触发记录 | [TriggerView](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/Views/TriggerView.xaml) | 触发规则（信号/应答地址、超时）→ 监听状态与报警条 → 最近的触发记录 |
 
