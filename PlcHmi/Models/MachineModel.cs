@@ -35,6 +35,18 @@ public static class MachineModels
         new("AIPC", "大片机")
     ];
 
+    /// <summary>
+    /// 机台号规范化：去掉两端空格、字母部分补成大写（aixp001 → AIXP001）。
+    /// 格式不对时也照样去空格转大写返回，交给界面去提示"认不出机型"。
+    /// </summary>
+    public static string Normalize(string? machineNo)
+    {
+        string trimmed = machineNo?.Trim() ?? string.Empty;
+
+        var match = MachineNoPattern.Match(trimmed);
+        return match.Success ? match.Groups[1].Value.ToUpperInvariant() + match.Groups[2].Value : trimmed.ToUpperInvariant();
+    }
+
     /// <summary>机型代号 → 机型；不在表里返回 null（现场允许手工选到别的档案）</summary>
     public static MachineModel? Find(string? code) =>
         string.IsNullOrWhiteSpace(code)

@@ -55,19 +55,9 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>机台号框同样失焦才提交，回车立即生效（免得每敲一个字就写一次配置文件）</summary>
-    private void MachineNoCommitOnEnter(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter && sender is TextBox box)
-        {
-            box.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
-            e.Handled = true;
-        }
-    }
-
     /// <summary>
-    /// 进项目时如果还没填机台号，问一次。可以跳过，但空了后面写触发记录就没法认设备，
-    /// 所以宁可在开工前提醒一下；状态栏那格随时能补。
+    /// 进项目时如果还没填机台号，问一次（首次填写不用密码）。
+    /// 机台号决定机型，空了写触发记录也认不出设备，所以开工前先填上。
     /// </summary>
     protected override void OnContentRendered(EventArgs e)
     {
@@ -80,7 +70,28 @@ public partial class MainWindow : Window
 
         _machineNoPrompted = true;
 
-        var dialog = new MachineNoWindow(_viewModel.Store.Profile, _viewModel.MachineNo) { Owner = this };
+        var dialog = new MachineNoWindow(_viewModel.Store.Profile, _viewModel.MachineNo, requirePassword: false)
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            _viewModel.MachineNo = dialog.MachineNo;
+        }
+    }
+
+    /// <summary>
+    /// 左上角【改】机台号：先过关（密码在窗里校验），再改。
+    /// 机台号一变，机型、配置整套都会跟着换，所以不能让它随手被改。
+    /// </summary>
+    private void EditMachineNo_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new MachineNoWindow(_viewModel.Store.Profile, _viewModel.MachineNo, requirePassword: true)
+        {
+            Owner = this
+        };
+
         if (dialog.ShowDialog() == true)
         {
             _viewModel.MachineNo = dialog.MachineNo;

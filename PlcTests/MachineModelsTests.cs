@@ -49,6 +49,15 @@ public class MachineModelsTests
     public void 按代号找机型_大小写与空格都不敏感(string code) =>
         Assert.Equal("AIXP", MachineModels.Find(code)!.Code);
 
+    [Theory]
+    [InlineData("aixp001", "AIXP001")]
+    [InlineData("  aixp001  ", "AIXP001")]
+    [InlineData("AIXP999", "AIXP999")]
+    [InlineData("aibx999", "AIBX999")]   // 未知代号也照样转大写，认不认得出机型交给 TryResolve 判
+    [InlineData("", "")]
+    public void 机台号规范成大写(string input, string expected) =>
+        Assert.Equal(expected, MachineModels.Normalize(input));
+
     [Fact]
     public void 自定义机型名_不在已知表里() => Assert.Null(MachineModels.Find("默认"));
 }

@@ -57,16 +57,28 @@
 | 路径 | 内容 | 是否入库 |
 |---|---|---|
 | `.env`（模板 [.env.example](file:///d:/taoxi_download_for_use/no_use_do/c_Test/.env.example)） | 数据库地址、账号、密码 | ❌ 已在 [.gitignore](file:///d:/taoxi_download_for_use/no_use_do/c_Test/.gitignore) 里排除 |
-| `data/` | **唯一的运行根目录**：配置 / 日志 / 导出 / 更新包全在它里面，按用途分子目录 | 只放行 `configs/` |
-| `data/configs/`\[机型\].json | **一台机器一份**：连接参数（IP/端口/从站号/采集周期）+ 点位表 + 存储组 + 触发规则 | ✅ 跟着代码一起版本管理 |
+| `data/` | **唯一的运行根目录**：配置 / 日志 / 导出 / 更新包全在它里面，按用途分子目录 | 全部忽略（各机器自己生成） |
+| `data/configs/`\[机型\].json | **现场配置副本**：点位表 + 存储组 + 触发规则（工艺内容），首次运行从随包的机型模板复制 | ❌ |
+| `data/machine.json` | **本机档案**：机台号 + 连接参数（IP/端口/从站号/采集周期）+ 当前机型 | ❌ |
+| `PlcHmi/Templates/`\[机型\].json | **机型模板**：一个机型一份，随程序发布，是"这个型号该怎么采"的标准答案 | ✅ |
 | `data/logs/` | 运行日志：按天滚动，只留 30 天 | ❌ |
 | `data/exports/` | 历史数据导出 | ❌ |
 | `data/updates/` | 远程更新包：应用成功后只留 2 份以便回滚 | ❌ |
-| `data/last-profile.txt` | 上次使用的机型 | ❌ |
 
 根目录怎么定：向上找 `.env` / `.git` 的那一层（开发时就是仓库根），找不到就用 exe 目录（现场部署）；目录不可写时（例如装在 Program Files）整体回退到 `%ProgramData%\PlcHmi`。
 
-**换机型就是换配置文件**：工具栏最左侧的「机型」下拉选已有档案，也可以直接敲一个新名字（第一次上机就是这么建档的），点位表 / 存储组 / 触发规则 / 连接参数整套跟着换；切换会先断开连接，避免拿错从站号继续读。启动时用 `dotnet run --project PlcHmi\PlcHmi.csproj -- --config 挤出机A` 直接指定机型，不指定就用上次那个。
+**机型由机台号决定**：机台号是「4 个字母 + 3 位数字」（如 `AIXP999`），前 4 位就是机型代号 —— `AIXP` 分离封装机、`AITN` 辊压机、`AIBM` 成型机、`AIIR` 提纯机、`AIPC` 大片机（表在 [MachineModel.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Models/MachineModel.cs) 里，是唯一判定依据）。机台号以**左上角大字**展示，下面一行小字写出它对应的机型；小写会自动补成大写（`aixp001` → `AIXP001`）。
+
+**机型不给手工选**：它只能由机台号推出来，避免出现"机台号写着 AIXP、实际却按 AIIR 采"这种事。所以**改机台号要输密码**（[MachineNoWindow](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MachineNoWindow.xaml.cs)，防误改的软门槛，不是安全机制）。格式不对或代号不在表里时**不切机型**，保留当前机型继续跑，并在机台号下面标黄提示 —— 不会因为一个笔误就去动配置。
+
+**三份文件各管一段**，这样同型号的配置才能完全一致、可以整份复制给另一台机器：
+- `PlcHmi/Templates/<代号>.json`：机型的**标准工艺**，随代码走、随包发布（`dotnet publish` 会带上），现场只读。
+- `data/configs/<代号>.json`：**现场副本**，首次运行从模板复制，之后现场调的就是这一份（同型号之间可以直接对拷）。
+- `data/machine.json`：**这台设备**的机台号与连接参数 —— 每台都不一样，所以不放在机型配置里。
+
+启动时选机型的顺序（见 [ProfileResolver.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Services/ProfileResolver.cs)）：命令行 `--config <代号>` > 命令行 `--machine <机台号>` > 本机档案里记的已知机型 > 机台号推出来的机型 > 已有的自定义档案 > 已知机型第一个。例如 `dotnet run --project PlcHmi\PlcHmi.csproj -- --machine AIXP999`。
+
+老配置（机台号与连接参数还写在机型配置里的那份）启动时会自动迁移：机台号与连接参数搬到 `data/machine.json`，若机台号能认出机型且该机型的档案还不存在，就把老档案整份复制成 `<代号>.json` 当初始内容（老档案本身保留，下拉里仍可选回去）。
 
 ---
 
@@ -95,16 +107,22 @@ c_Test/
 │   ├── App.xaml(.cs)                 # 启动 + 加载 .env + 全应用共用样式
 │   ├── MainWindow.xaml(.cs)          # 四分页界面 / 卡片自适应列数
 │   ├── RecordHistoryWindow.xaml(.cs) # 点卡片曲线弹出的「表记录历史」窗
+│   ├── MachineNoWindow.xaml(.cs)     # 进项目时问一次机台号（前 4 位决定机型）
+│   ├── Templates/                    # 机型模板：AIXP|AITN|AIBM|AIIR|AIPC.json，随包发布
 │   ├── Models/
 │   │   ├── PlcTag.cs                 # 点位：地址+名称+单位+Scale+Offset+宽表列名（可编辑）
-│   │   ├── PlcConfig.cs              # 机型配置对象：连接参数 + 点位表 + 存储组 + 触发规则
+│   │   ├── PlcConfig.cs              # 机型配置对象：点位表 + 存储组 + 触发规则（工艺内容）
+│   │   ├── MachineModel.cs           # 机台号 → 机型：4 字母代号 + 中文型号名
+│   │   ├── MachineProfile.cs         # 本机档案：机台号 + 连接参数 + 当前机型
 │   │   ├── Sample.cs / AcquisitionBatch.cs  # 一轮采集结果（成功样本 + 失败点位）
 │   │   ├── TriggerRule.cs            # 触发规则：信号/应答地址 + 超时
 │   │   └── ScanResult.cs             # 扫描结果一行
 │   ├── Services/
-│   │   ├── AppPaths.cs               # 目录约定：data/ 下的 configs|logs|exports|updates
+│   │   ├── AppPaths.cs               # 目录约定：data/ 下的 configs|logs|exports|updates + 机型模板目录
 │   │   ├── AppServices.cs            # 组合根：需要 new 具体实现的地方只有这里
-│   │   ├── ConfigStore.cs            # 机型配置读写（一个实例 = 一个机型）
+│   │   ├── ConfigStore.cs            # 机型配置读写（一个实例 = 一个机型；缺就抄模板）
+│   │   ├── MachineStore.cs           # 本机档案读写（data/machine.json）
+│   │   ├── ProfileResolver.cs        # 启动时用哪个机型：命令行 > 档案 > 机台号 > 兜底
 │   │   ├── PlcAcquisitionService.cs  # 后台采集循环，异常分层
 │   │   ├── ModbusScanService.cs      # 寄存器扫描（分段批读 + 失败段逐点定位）
 │   │   ├── SlaveProbeService.cs      # 从站号探测（短超时 + 分批并行）
@@ -190,7 +208,7 @@ dotnet test          # 根目录执行，走 c_Test.sln，跑 PlcTests
 
 ### 4. 界面结构：三个页签
 
-[MainWindow.xaml](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml) 顶部是共用工具条（机型/连接参数/从站/采集控制），下面是 `TabControl`：
+[MainWindow.xaml](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/MainWindow.xaml) 顶部是共用工具条（左侧机台号大字，右侧上行连接参数、下行开关与状态），下面是 `TabControl`：
 
 | 页签 | 干什么 |
 |---|---|

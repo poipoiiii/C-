@@ -18,102 +18,136 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- ==================== 机型 + 连接 + 采集控制（各页共用） ==================== -->
-        <hc:Card Grid.Row="0" Padding="14,12" Margin="0,0,0,12">
-            <WrapPanel VerticalAlignment="Center">
-                <!-- 首项用显式的「机型」标签，不再叫「连接」：右边那个开关才叫连接，否则容易被看成「连接 = 默认」。
-                     机型由机台号前 4 位决定（AIXP999 → AIXP），认不出时可在这里手工选；
-                     一个机型一份 data/configs/<机型>.json，首次运行从随包的 Templates/<机型>.json 复制 -->
-                <TextBlock Text="机型" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" />
-                <ComboBox x:Name="ProfileBox" Width="170" ItemsSource="{Binding Profiles}"
-                          SelectedItem="{Binding SelectedProfile}" DisplayMemberPath="Display" />
-                <TextBox hc:InfoElement.Title="PLC IP" hc:InfoElement.TitlePlacement="Left" Width="180" Margin="8,0,0,0"
-                         Text="{Binding Ip, UpdateSourceTrigger=PropertyChanged}" />
-                <TextBox hc:InfoElement.Title="端口" hc:InfoElement.TitlePlacement="Left" Width="110" Margin="8,0,0,0"
-                         Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" />
-                <ComboBox x:Name="SlaveIdBox" hc:InfoElement.Title="从站号" hc:InfoElement.TitlePlacement="Left" Width="130"
-                          Margin="8,0,0,0" IsEditable="True" ItemsSource="{Binding SlaveIds}"
-                          Text="{Binding SlaveIdText, UpdateSourceTrigger=LostFocus}"
-                          PreviewKeyDown="ComboBoxCommitOnEnter" />
-                <Button Content="探测从站" Command="{Binding ProbeSlavesCommand}" Width="88" Margin="8,0,0,0" />
-                <TextBlock Text="{Binding SlaveProbeStatus}" Style="{StaticResource SectionHint}" />
-                <TextBox hc:InfoElement.Title="采集周期(ms)" hc:InfoElement.TitlePlacement="Left" Width="150"
-                         Margin="8,0,0,0" Text="{Binding IntervalMs, UpdateSourceTrigger=PropertyChanged}" />
+        <!-- ==================== 机台号 + 连接 + 采集控制（各页共用） ==================== -->
+        <hc:Card Grid.Row="0" Padding="16,12" Margin="0,0,0,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
 
-                <Rectangle Style="{StaticResource Divider}" />
-                <!-- 连接/断开 合成一个开关，开始/停止采集 合成一个开关；两个开关各管一件事，互不代劳。
-                     ToggleGesture 必须显式写成 LeftClick：ToggleBlock 靠内部的 MouseBinding 触发，默认手势是 None，不写就点不动。
-                     Padding/Height 也要自己给：ToggleBlock 默认没有内边距、高度就是内容高度 -->
-                <hc:ToggleBlock IsChecked="{Binding ConnectionSwitch}" Width="88" Height="32" Padding="14,0"
-                                VerticalAlignment="Center" ToggleGesture="LeftClick"
-                                CheckedContent="断开" UnCheckedContent="连接"
-                                ToolTip="连接 / 断开 PLC 链路">
-                    <hc:ToggleBlock.Style>
-                        <Style TargetType="hc:ToggleBlock" BasedOn="{StaticResource {x:Type hc:ToggleBlock}}">
-                            <Setter Property="Foreground" Value="White" />
-                            <Setter Property="Background" Value="#409EFF" />
-                            <Style.Triggers>
-                                <Trigger Property="IsChecked" Value="True">
-                                    <Setter Property="Background" Value="#909399" />
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                    </hc:ToggleBlock.Style>
-                </hc:ToggleBlock>
+                <!-- 左上角：机台号大字。机型完全由它前 4 位决定（AIXP999 → AIXP），不给手工选；
+                     改机台号要密码（见 MachineNoWindow），免得现场随手一改顺手把机型也换了 -->
+                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding MachineNoText}" FontSize="30" FontWeight="Bold"
+                                   FontFamily="Consolas" Foreground="#303133" VerticalAlignment="Center" />
+                        <Button Content="改" Width="34" Height="30" Margin="12,0,0,0" VerticalAlignment="Center"
+                                Click="EditMachineNo_Click" ToolTip="改机台号（需要密码）" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding MachineModelText}" FontSize="12" Margin="0,3,0,0">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="#909399" />
+                                <Style.Triggers>
+                                    <!-- 机台号认不出机型：标黄提醒，但照旧用当前机型的配置跑 -->
+                                    <DataTrigger Binding="{Binding HasMachineNoProblem}" Value="True">
+                                        <Setter Property="Foreground" Value="#E6A23C" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
 
-                <hc:ToggleBlock IsChecked="{Binding AcquisitionSwitch}" Width="104" Height="32" Padding="14,0"
-                                Margin="8,0,0,0" VerticalAlignment="Center" IsEnabled="{Binding IsConnected}"
-                                ToggleGesture="LeftClick"
-                                CheckedContent="停止采集" UnCheckedContent="开始采集"
-                                ToolTip="开始 / 停止采集（只停数据采集，连接保持不变）">
-                    <hc:ToggleBlock.Style>
-                        <Style TargetType="hc:ToggleBlock" BasedOn="{StaticResource {x:Type hc:ToggleBlock}}">
-                            <Setter Property="Foreground" Value="White" />
-                            <Setter Property="Background" Value="#67C23A" />
-                            <Style.Triggers>
-                                <Trigger Property="IsChecked" Value="True">
-                                    <Setter Property="Background" Value="#E6A23C" />
-                                </Trigger>
-                                <!-- ToggleBlock 不是按钮，禁用时不会自己变灰，这里手动变淡，一眼看出是没连上 -->
-                                <Trigger Property="IsEnabled" Value="False">
-                                    <Setter Property="Opacity" Value="0.5" />
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                    </hc:ToggleBlock.Style>
-                </hc:ToggleBlock>
+                <Rectangle Grid.Column="1" Width="1" Fill="#EBEEF5" Margin="20,2" />
 
-                <Rectangle Style="{StaticResource Divider}" />
-                <!-- Background=Transparent 是为了整块都能点：Border 背景为 null 时空白处不参与命中测试，只有文字能点 -->
-                <hc:ToggleBlock IsChecked="{Binding PersistEnabled}" Height="32" Padding="14,0"
-                                VerticalAlignment="Center" Background="Transparent" ToggleGesture="LeftClick"
-                                CheckedContent="写入数据库" UnCheckedContent="不落库" />
+                <!-- 右边分两行：上一行「连什么」，下一行「怎么采 + 三个开关 + 状态」 -->
+                <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                    <WrapPanel>
+                        <TextBox hc:InfoElement.Title="PLC IP" hc:InfoElement.TitlePlacement="Left" Width="190"
+                                 Text="{Binding Ip, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBox hc:InfoElement.Title="端口" hc:InfoElement.TitlePlacement="Left" Width="120"
+                                 Margin="12,0,0,0" Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" />
+                        <ComboBox x:Name="SlaveIdBox" hc:InfoElement.Title="从站号" hc:InfoElement.TitlePlacement="Left"
+                                  Width="140" Margin="12,0,0,0" IsEditable="True" ItemsSource="{Binding SlaveIds}"
+                                  Text="{Binding SlaveIdText, UpdateSourceTrigger=LostFocus}"
+                                  PreviewKeyDown="ComboBoxCommitOnEnter" />
+                        <Button Content="探测从站" Command="{Binding ProbeSlavesCommand}" Width="88" Margin="12,0,0,0" />
+                        <TextBlock Text="{Binding SlaveProbeStatus}" Style="{StaticResource SectionHint}"
+                                   VerticalAlignment="Center" />
+                    </WrapPanel>
 
-                <Rectangle Style="{StaticResource Divider}" />
-                <Ellipse Width="10" Height="10" VerticalAlignment="Center" Margin="0,0,8,0">
-                    <Ellipse.Style>
-                        <Style TargetType="Ellipse">
-                            <Setter Property="Fill" Value="#C0C4CC" />
-                            <Style.Triggers>
-                                <!-- 连上且没通信错误 → 绿 -->
-                                <MultiDataTrigger>
-                                    <MultiDataTrigger.Conditions>
-                                        <Condition Binding="{Binding IsConnected}" Value="True" />
-                                        <Condition Binding="{Binding CommError}" Value="" />
-                                    </MultiDataTrigger.Conditions>
-                                    <Setter Property="Fill" Value="#67C23A" />
-                                </MultiDataTrigger>
-                                <!-- 连上但有通信错误 → 红 -->
-                                <DataTrigger Binding="{Binding IsConnected}" Value="True">
-                                    <Setter Property="Fill" Value="#F56C6C" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Ellipse.Style>
-                </Ellipse>
-                <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" FontWeight="SemiBold"
-                           Foreground="#606266" />
-            </WrapPanel>
+                    <WrapPanel Margin="0,10,0,0">
+                        <TextBox hc:InfoElement.Title="采集周期(ms)" hc:InfoElement.TitlePlacement="Left" Width="160"
+                                 Text="{Binding IntervalMs, UpdateSourceTrigger=PropertyChanged}" />
+
+                        <!-- 连接/断开 合成一个开关，开始/停止采集 合成一个开关。
+                             ToggleGesture 必须显式写 LeftClick：ToggleBlock 靠内部的 MouseBinding 触发，
+                             默认手势是 None，不写就点不动；Padding/Height 也要自己给 -->
+                        <hc:ToggleBlock IsChecked="{Binding ConnectionSwitch}" Width="88" Height="32" Padding="14,0"
+                                        Margin="16,0,0,0" VerticalAlignment="Center" ToggleGesture="LeftClick"
+                                        CheckedContent="断开" UnCheckedContent="连接"
+                                        ToolTip="连接 / 断开 PLC 链路">
+                            <hc:ToggleBlock.Style>
+                                <Style TargetType="hc:ToggleBlock" BasedOn="{StaticResource {x:Type hc:ToggleBlock}}">
+                                    <Setter Property="Foreground" Value="White" />
+                                    <Setter Property="Background" Value="#409EFF" />
+                                    <Style.Triggers>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter Property="Background" Value="#909399" />
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </hc:ToggleBlock.Style>
+                        </hc:ToggleBlock>
+
+                        <hc:ToggleBlock IsChecked="{Binding AcquisitionSwitch}" Width="104" Height="32" Padding="14,0"
+                                        Margin="8,0,0,0" VerticalAlignment="Center" IsEnabled="{Binding IsConnected}"
+                                        ToggleGesture="LeftClick"
+                                        CheckedContent="停止采集" UnCheckedContent="开始采集"
+                                        ToolTip="开始 / 停止采集（只停数据采集，连接保持不变）">
+                            <hc:ToggleBlock.Style>
+                                <Style TargetType="hc:ToggleBlock" BasedOn="{StaticResource {x:Type hc:ToggleBlock}}">
+                                    <Setter Property="Foreground" Value="White" />
+                                    <Setter Property="Background" Value="#67C23A" />
+                                    <Style.Triggers>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter Property="Background" Value="#E6A23C" />
+                                        </Trigger>
+                                        <!-- ToggleBlock 不是按钮，禁用时不会自己变灰，这里手动变淡 -->
+                                        <Trigger Property="IsEnabled" Value="False">
+                                            <Setter Property="Opacity" Value="0.5" />
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </hc:ToggleBlock.Style>
+                        </hc:ToggleBlock>
+
+                        <!-- Background=Transparent 是为了整块都能点：Border 背景为 null 时空白处不参与命中测试 -->
+                        <hc:ToggleBlock IsChecked="{Binding PersistEnabled}" Height="32" Padding="14,0"
+                                        Margin="16,0,0,0" VerticalAlignment="Center" Background="Transparent"
+                                        ToggleGesture="LeftClick"
+                                        CheckedContent="写入数据库" UnCheckedContent="不落库" />
+
+                        <Rectangle Style="{StaticResource Divider}" />
+                        <Ellipse Width="10" Height="10" VerticalAlignment="Center" Margin="0,0,8,0">
+                            <Ellipse.Style>
+                                <Style TargetType="Ellipse">
+                                    <Setter Property="Fill" Value="#C0C4CC" />
+                                    <Style.Triggers>
+                                        <!-- 连上且没通信错误 → 绿 -->
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding IsConnected}" Value="True" />
+                                                <Condition Binding="{Binding CommError}" Value="" />
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Fill" Value="#67C23A" />
+                                        </MultiDataTrigger>
+                                        <!-- 连上但有通信错误 → 红 -->
+                                        <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                            <Setter Property="Fill" Value="#F56C6C" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Ellipse.Style>
+                        </Ellipse>
+                        <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" FontWeight="SemiBold"
+                                   Foreground="#606266" TextTrimming="CharacterEllipsis" MaxWidth="420" />
+                    </WrapPanel>
+                </StackPanel>
+            </Grid>
         </hc:Card>
 
         <TabControl Grid.Row="1" FontSize="14">
@@ -614,30 +648,7 @@
                 </Border.Style>
                 <TextBlock Text="{Binding ProfileStatus}" Foreground="#409EFF" />
             </Border>
-            <!-- 机台号：进项目时弹框问过一次，这里随时能改；失焦或回车才落盘。前 4 位决定机型 -->
-            <Border Background="#F4F4F5" CornerRadius="3" Padding="10,2">
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="机台号" Foreground="#909399" VerticalAlignment="Center" />
-                    <TextBox Width="130" Margin="6,0,0,0" BorderThickness="0" Background="Transparent"
-                             VerticalContentAlignment="Center" MaxLength="64"
-                             ToolTip="4 个字母 + 3 位数字，例如 AIXP999；前 4 位决定机型"
-                             Text="{Binding MachineNo, UpdateSourceTrigger=LostFocus}"
-                             KeyDown="MachineNoCommitOnEnter" />
-                </StackPanel>
-            </Border>
-            <!-- 机台号认不出机型时提醒一句：现场允许手工选机型，所以标黄不标红 -->
-            <Border Background="#FDF6EC">
-                <Border.Style>
-                    <Style TargetType="Border" BasedOn="{StaticResource StatusChip}">
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding MachineNoHint}" Value="">
-                                <Setter Property="Visibility" Value="Collapsed" />
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </Border.Style>
-                <TextBlock Text="{Binding MachineNoHint}" Foreground="#E6A23C" />
-            </Border>
+            <!-- 机台号已挪到左上角大字展示；这里只留配置文件路径、状态与告警 -->
             <Border Background="#F4F4F5" CornerRadius="3" Padding="10,5">
                 <TextBlock Text="{Binding StatusText}" Foreground="#606266" />
             </Border>

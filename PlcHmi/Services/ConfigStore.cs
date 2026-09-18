@@ -89,6 +89,14 @@ public sealed class ConfigStore
         return true;
     }
 
+    /// <summary>
+    /// 把一个已有档案整份复制成另一个机型的档案。迁移用：
+    /// 老档案（例如「默认」）就是这台设备现场调好的真实配置，按机台号认出新机型时拿它当初始内容，
+    /// 别用模板把现场的点位表盖掉。目标文件已存在则不动。
+    /// </summary>
+    public static void CopyConfigFile(string fromProfile, string toProfile) =>
+        File.Copy(PathFor(fromProfile), PathFor(toProfile), overwrite: false);
+
     public PlcConfig Load()
     {
         LoadWarning = null;

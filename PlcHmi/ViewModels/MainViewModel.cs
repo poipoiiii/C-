@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -30,14 +31,14 @@ public partial class MainViewModel : ObservableObject
     /// <summary>本机档案（data/machine.json）：机台号 + 连接参数 + 当前机型。机型配置里不再放这些</summary>
     private MachineProfile _machine;
 
+    /// <summary>机型模板缺失的告警（安装包不完整），启动时提示一次</summary>
+    private string? _templateWarning;
+
     /// <summary>当前机型的配置；切换机型时整份换掉</summary>
     private PlcConfig _config;
 
     /// <summary>当前机型的配置读写（一个实例对应一个机型）</summary>
     private ConfigStore _store;
-
-    /// <summary>切换机型期间为 true：避免下拉框回滚/重复触发又走一遍切换</summary>
-    private bool _switchingProfile;
 
     private IModbusClient? _modbus;
     private PlcAcquisitionService? _acquisition;
@@ -54,16 +55,24 @@ public partial class MainViewModel : ObservableObject
         // 机型：命令行 --config / --machine > 本机档案（机台号、上次选的机型）> 已有配置 > 已知机型第一个
         _machine = MachineStore.Load();
         string profile = ProfileResolver.Resolve(Environment.GetCommandLineArgs(), _machine);
-        _store = ConfigStore.Open(profile);
-
-        // 现场副本不在就从随包发布的机型模板复制一份；模板也缺，说明安装包不完整，退回内置默认点位
-        string? templateWarning = ConfigStore.EnsureConfigFile(profile)
-            ? null
-            : $"没找到机型模板 Templates/{profile}.json（安装包可能不完整）：已按内置默认点位建了 {profile}.json，请核对点位表";
-
-        _config = _store.Load();
-        ReconcileDefaultColumnNames(_config.Tags);
+        _config = LoadConfig(profile, out _store);
         MigrateMachineProfile();                     // 老配置里的机台号/连接参数搬进本机档案
+
+        // 迁移可能刚把机台号捡回来：再判一次机型（老档案叫「默认」，而机台号说明它其实是 AIXP）
+        string resolved = ProfileResolver.Resolve(Environment.GetCommandLineArgs(), _machine);
+        if (resolved != profile)
+        {
+            // 老档案是这台设备现场调好的真实配置：新机型的档案还没有时，直接拿它当初始内容，
+            // 别用模板把点位表盖掉（老档案本身留着不动，下拉里还能选回去）
+            if (!File.Exists(ConfigStore.PathFor(resolved)))
+            {
+                ConfigStore.CopyConfigFile(_store.Profile, resolved);
+            }
+
+            profile = resolved;
+            _config = LoadConfig(profile, out _store);
+        }
+
         _machineNo = _machine.MachineNo;             // 直接写字段：启动不该触发一次保存
 
         if (_machine.Profile != profile)
@@ -80,13 +89,13 @@ public partial class MainViewModel : ObservableObject
 
         Dashboard.Rebuild();
         ApplyConnectionConfig();
-        RefreshProfileList();
+        RefreshProfileStatus();
         if (_store.LoadWarning is { } warning)
         {
             StatusText = warning;
             Log.Warning("配置告警：{Warning}", warning);
         }
-        else if (templateWarning is not null)
+        else if (_templateWarning is { } templateWarning)
         {
             StatusText = templateWarning;
             Log.Warning("{Warning}", templateWarning);
@@ -124,52 +133,80 @@ public partial class MainViewModel : ObservableObject
 
     // ---------------- 本机档案与机型 ----------------
 
-    /// <summary>机型下拉项：已知机型 + data/configs 里已有的自定义档案（例如老的「默认」），别让老档案变成孤儿</summary>
-    public ObservableCollection<MachineModel> Profiles { get; } = [];
-
-    /// <summary>当前机型。机台号能认出机型时自动切过去；认不出就靠这个下拉手工选</summary>
-    [ObservableProperty] private MachineModel? _selectedProfile;
-
-    [ObservableProperty] private string _profileStatus = string.Empty;
-
-    /// <summary>机台号有问题时的提示（空 = 没问题），状态栏标出来</summary>
-    [ObservableProperty] private string _machineNoHint = string.Empty;
-
     /// <summary>
     /// 机台号：现场这台设备的编号（4 字母 + 3 数字，前 4 位决定机型）。
-    /// 进项目时若为空，界面会弹框让用户填；改这里立刻落盘，写触发记录时自动带上（见 TriggerViewModel）。
+    /// 进项目时若为空，界面会弹框让用户填；**改它要输密码**（见 MainWindow 的 EditMachineNo_Click），
+    /// 免得现场随手一改顺手把机型也换了。小写会自动补成大写。
     /// </summary>
     [ObservableProperty] private string _machineNo = string.Empty;
+
+    /// <summary>状态栏那行；机型已经大字展示在左上角，这里只留配置文件路径，不重复</summary>
+    [ObservableProperty] private string _profileStatus = string.Empty;
 
     /// <summary>还没填机台号：界面据此决定要不要弹输入框</summary>
     public bool NeedsMachineNo => string.IsNullOrWhiteSpace(MachineNo);
 
+    /// <summary>左上角的大字：机台号</summary>
+    public string MachineNoText => NeedsMachineNo ? "未填写" : MachineNo;
+
+    /// <summary>机台号有问题（没填 / 格式不对 / 代号不在表里）：界面标黄</summary>
+    public bool HasMachineNoProblem => MachineNoHint.Length > 0;
+
+    /// <summary>机台号的问题说明；没问题时为空串</summary>
+    public string MachineNoHint
+    {
+        get
+        {
+            if (NeedsMachineNo)
+            {
+                return "还没填机台号：点【改】填一下，前 4 位决定机型";
+            }
+
+            return MachineModels.TryResolve(MachineNo, out _)
+                ? string.Empty
+                : $"认不出机型：机台号应为{MachineModels.FormatHint}（小写会自动转大写）";
+        }
+    }
+
+    /// <summary>机台号下面那行小字：这个机台号对应的机型</summary>
+    public string MachineModelText
+    {
+        get
+        {
+            string model = MachineModels.Find(_store.Profile) is { } found
+                ? $"{found.Name}（{found.Code}）"
+                : $"{_store.Profile}（自定义档案，不在已知机型表里）";
+
+            return HasMachineNoProblem ? $"{model} · {MachineNoHint}" : model;
+        }
+    }
+
     /// <summary>
-    /// 机台号改了：存进本机档案，并按前 4 位自动切到对应机型（AIXP999 → AIXP）。
-    /// 认不出机型不算错误 —— 保留当前机型、提示用户手工选：现场允许临时接一台没登记的机器。
+    /// 机台号改了：小写补成大写、存进本机档案，并按前 4 位切到对应机型（AIXP999 → AIXP）。
+    /// 认不出机型不切、只标黄提示 —— 机型不给手工选，所以这时候维持当前机型继续跑。
     /// </summary>
     partial void OnMachineNoChanged(string value)
     {
-        string machineNo = value?.Trim() ?? string.Empty;
-        _machine.MachineNo = machineNo;
-        OnPropertyChanged(nameof(NeedsMachineNo));
+        string machineNo = MachineModels.Normalize(value);
 
-        if (!MachineModels.TryResolve(machineNo, out var model))
+        if (!string.Equals(machineNo, value, StringComparison.Ordinal))
         {
-            MachineNoHint = machineNo.Length == 0
-                ? string.Empty
-                : $"机台号「{machineNo}」认不出机型（应为{MachineModels.FormatHint}），请在机型框里手工选";
-            SaveMachineQuietly();
-            RefreshProfileStatus();
+            MachineNo = machineNo;   // 回写大写：这一遍值就相同了，会再进来一次然后往下走
             return;
         }
 
-        MachineNoHint = string.Empty;
+        _machine.MachineNo = machineNo;
+        NotifyMachineHeader();
+
+        if (!MachineModels.TryResolve(machineNo, out var model))
+        {
+            SaveMachineQuietly();
+            return;
+        }
 
         if (model.Code == _store.Profile)
         {
             SaveMachineQuietly();
-            RefreshProfileStatus();
             StatusText = $"机台号 {machineNo} → 机型 {model.Display}";
             return;
         }
@@ -179,61 +216,18 @@ public partial class MainViewModel : ObservableObject
         _ = SwitchProfileAsync(model.Code);
     }
 
-    /// <summary>机型下拉变了（用户手工选）：换一套点位表 / 存储组 / 触发规则</summary>
-    partial void OnSelectedProfileChanged(MachineModel? value)
+    /// <summary>机台号那几块（大字 / 机型说明 / 标黄状态）一起刷新</summary>
+    private void NotifyMachineHeader()
     {
-        if (value is null || _switchingProfile || value.Code == _store.Profile)
-        {
-            return;
-        }
-
-        // 手工选的机型记进本机档案：下次开机还用它（机台号一改则按机台号重推）
-        _machine.Profile = value.Code;
-        SaveMachineQuietly();
-        _ = SwitchProfileAsync(value.Code);
+        OnPropertyChanged(nameof(MachineNoText));
+        OnPropertyChanged(nameof(MachineModelText));
+        OnPropertyChanged(nameof(MachineNoHint));
+        OnPropertyChanged(nameof(HasMachineNoProblem));
+        OnPropertyChanged(nameof(NeedsMachineNo));
     }
 
-    /// <summary>机型下拉：已知机型在前，data/configs 里已有的自定义档案在后</summary>
-    private void RefreshProfileList()
-    {
-        string current = _store.Profile;
-
-        Profiles.Clear();
-        foreach (var model in MachineModels.All)
-        {
-            Profiles.Add(model);
-        }
-
-        foreach (var name in ConfigStore.ListProfiles().Where(name => MachineModels.Find(name) is null))
-        {
-            Profiles.Add(new MachineModel(name, "自定义"));
-        }
-
-        // 这里只是把选中项拨回当前机型，别当成用户在切换
-        _switchingProfile = true;
-        try
-        {
-            SelectedProfile = Profiles.FirstOrDefault(m => m.Code == current) ?? SelectedProfile;
-        }
-        finally
-        {
-            _switchingProfile = false;
-        }
-
-        RefreshProfileStatus();
-    }
-
-    /// <summary>状态栏那行机型提示；手工选的机型与机台号推出来的不一致时点出来</summary>
-    private void RefreshProfileStatus()
-    {
-        string name = MachineModels.Find(_store.Profile)?.Name ?? "自定义机型";
-        ProfileStatus = $"当前机型：{_store.Profile}（{name}）· {_store.FilePath}";
-
-        if (MachineModels.TryResolve(MachineNo, out var implied) && implied.Code != _store.Profile)
-        {
-            ProfileStatus += $"　⚠ 与机台号 {MachineNo} 推出来的 {implied.Code} 不一致（机型是手工选的）";
-        }
-    }
+    /// <summary>状态栏那行只写配置文件路径（机型在左上角，不重复）</summary>
+    private void RefreshProfileStatus() => ProfileStatus = $"配置文件：{_store.FilePath}";
 
     /// <summary>本机档案落盘；失败只在状态栏提示，不打断操作</summary>
     private void SaveMachineQuietly()
@@ -292,13 +286,30 @@ public partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 切换机型：先断开连接，再整份换配置。
-    /// 现场副本不在就从机型模板复制一份（第一次上这个型号就是这么建档案的）。
-    /// 机台号与连接参数属于本机档案，不跟着机型走。
+    /// 打开一个机型的配置：现场副本不在就从随包发布的机型模板复制一份
+    /// （第一次上这个型号、或者换到没见过的机型时就是这么建档案的）；
+    /// 模板也缺就按内置默认点位建，并记一条告警（安装包不完整）。
+    /// </summary>
+    private PlcConfig LoadConfig(string profile, out ConfigStore store)
+    {
+        store = ConfigStore.Open(profile);
+
+        if (!ConfigStore.EnsureConfigFile(profile))
+        {
+            _templateWarning = $"没找到机型模板 Templates/{profile}.json（安装包可能不完整）：" +
+                               $"已按内置默认点位建了 {profile}.json，请核对点位表";
+        }
+
+        var config = store.Load();
+        ReconcileDefaultColumnNames(config.Tags);
+        return config;
+    }
+
+    /// <summary>
+    /// 切换机型：先断开连接，再整份换配置。机台号与连接参数属于本机档案，不跟着机型走。
     /// </summary>
     private async Task SwitchProfileAsync(string profile)
     {
-        _switchingProfile = true;
         try
         {
             if (IsConnected)
@@ -307,14 +318,11 @@ public partial class MainViewModel : ObservableObject
             }
 
             Scan.CancelIfScanning();
-            ConfigStore.EnsureConfigFile(profile);
 
             // 先把新机型读出来，读失败就整个放弃、继续用原机型（_store 保持不动）
-            var next = ConfigStore.Open(profile);
-            var nextConfig = next.Load();
-            _store = next;
+            var nextConfig = LoadConfig(profile, out var nextStore);
+            _store = nextStore;
             _config = nextConfig;
-            ReconcileDefaultColumnNames(_config.Tags);
 
             // 四个页签各自按新配置重建（点位表、组表草稿、规则、卡片）
             Scan.OnConfigChanged();
@@ -322,7 +330,8 @@ public partial class MainViewModel : ObservableObject
             Storage.RebuildFromConfig();
             Dashboard.Rebuild();
 
-            RefreshProfileList();
+            RefreshProfileStatus();
+            NotifyMachineHeader();
 
             StatusText = _store.LoadWarning ??
                 $"已切换到机型「{profile}」（{MachineModels.Find(profile)?.Name ?? "自定义"}）：" +
@@ -333,11 +342,6 @@ public partial class MainViewModel : ObservableObject
         {
             StatusText = $"切换机型失败：{ex.Message}";
             Log.Error(ex, "切换机型失败：{Profile}", profile);
-            RefreshProfileList();
-        }
-        finally
-        {
-            _switchingProfile = false;
         }
     }
 
