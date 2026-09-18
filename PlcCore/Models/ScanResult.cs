@@ -1,6 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 
-namespace PlcHmi.Models;
+namespace PlcCore.Models;
 
 /// <summary>
 /// 扫描结果的一行：地址、读到的原始值、状态。

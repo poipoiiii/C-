@@ -1,4 +1,4 @@
-namespace PlcHmi.Models;
+namespace PlcCore.Models;
 
 /// <summary>某个点位本轮读失败：点位 + 简短原因（如 Modbus 异常码 2 = 地址不存在）</summary>
 public sealed record TagFailure(PlcTag Tag, string Reason);

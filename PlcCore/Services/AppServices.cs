@@ -1,6 +1,6 @@
 using PlcCore.Services;
 
-namespace PlcHmi.Services;
+namespace PlcCore.Services;
 
 /// <summary>
 /// 组合根：需要 new 具体实现的地方收拢到这一处，视图模型只从这里取依赖。

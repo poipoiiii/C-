@@ -1,8 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
-using PlcHmi.Models;
-using PlcHmi.Services;
+using PlcCore.Models;
+using PlcCore.Services;
 using SkiaSharp;
 
 namespace PlcHmi.ViewModels;

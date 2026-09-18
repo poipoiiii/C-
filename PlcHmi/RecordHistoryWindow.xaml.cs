@@ -1,5 +1,5 @@
 using System.Windows;
-using PlcHmi.Services;
+using PlcCore.Services;
 using PlcHmi.ViewModels;
 
 namespace PlcHmi;

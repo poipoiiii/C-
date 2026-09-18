@@ -1,8 +1,8 @@
 using System.IO;
 using System.Text.Json;
-using PlcHmi.Models;
+using PlcCore.Models;
 
-namespace PlcHmi.Services;
+namespace PlcCore.Services;
 
 /// <summary>
 /// 本机档案读写：data/machine.json，装"这台设备"的东西（机台号 / 连接参数 / 当前机型）。

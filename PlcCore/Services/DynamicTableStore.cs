@@ -3,9 +3,9 @@ using System.Data.Common;
 using System.Text;
 using System.Text.RegularExpressions;
 using PlcCore.Data;
-using PlcHmi.Models;
+using PlcCore.Models;
 
-namespace PlcHmi.Services;
+namespace PlcCore.Services;
 
 /// <summary>
 /// 动态目标表：表名/列名由界面填写，EF 实体是编译期固定的，所以这里用 ADO.NET 拼 SQL。

@@ -1,7 +1,7 @@
 using System.Text.Json.Serialization;
 using CommunityToolkit.Mvvm.ComponentModel;
 
-namespace PlcHmi.Models;
+namespace PlcCore.Models;
 
 /// <summary>
 /// 触发记录规则：靠握手模拟上升沿，保证每次触发都被记到、不重复。

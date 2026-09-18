@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
+using PlcCore.Models;
 using PlcCore.Services;
-using PlcHmi.Models;
-using PlcHmi.Services;
 
 namespace PlcTests;
 

@@ -1,8 +1,8 @@
 using NModbus;
 using PlcCore.Services;
-using PlcHmi.Models;
+using PlcCore.Models;
 
-namespace PlcHmi.Services;
+namespace PlcCore.Services;
 
 /// <summary>
 /// 触发记录监听：高频轮询信号寄存器，按握手时序推进，模拟上升沿。

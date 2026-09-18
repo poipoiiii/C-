@@ -1,7 +1,7 @@
 using System.Net.Sockets;
 using NModbus;
 
-namespace PlcHmi.Services;
+namespace PlcCore.Services;
 
 /// <summary>单个从站号的探测结果</summary>
 public sealed record SlaveProbeResult(byte UnitId, bool Responded, string Detail);

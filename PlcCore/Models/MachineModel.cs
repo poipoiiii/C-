@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 
-namespace PlcHmi.Models;
+namespace PlcCore.Models;
 
 /// <summary>
 /// 机型：4 字母代号 + 中文型号名。代号就是配置文件名（data/configs/AIXP.json），
@@ -34,6 +34,16 @@ public static class MachineModels
         new("AIIR", "提纯机"),
         new("AIPC", "大片机")
     ];
+
+    /// <summary>五个机型代号，拼成一句提示语：「AIXP / AITN / AIBM / AIIR / AIPC」</summary>
+    public static string CodeList { get; } = string.Join(" / ", All.Select(m => m.Code));
+
+    /// <summary>
+    /// 机台号不合格时的统一提示：**只能是这五种机型之一**。
+    /// 界面上的红字与标黄提示都引用它，免得几处写法不一致。
+    /// </summary>
+    public static string RequirementHint =>
+        $"机台号只能是这五种机型之一：{CodeList}（格式为 {FormatHint}，小写会自动转成大写）";
 
     /// <summary>
     /// 机台号规范化：去掉两端空格、字母部分补成大写（aixp001 → AIXP001）。

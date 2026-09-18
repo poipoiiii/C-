@@ -4,8 +4,8 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using PlcHmi.Models;
-using PlcHmi.Services;
+using PlcCore.Models;
+using PlcCore.Services;
 
 namespace PlcHmi.ViewModels;
 

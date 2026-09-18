@@ -1,7 +1,7 @@
 using System.Text.Json.Serialization;
 using CommunityToolkit.Mvvm.ComponentModel;
 
-namespace PlcHmi.Models;
+namespace PlcCore.Models;
 
 /// <summary>
 /// 采集点位：协议地址 + 变量名 + 换算规则 + 落库列名（宽表模式下用列名建表）。

@@ -1,6 +1,6 @@
-using PlcHmi.Models;
+using PlcCore.Models;
 
-namespace PlcHmi.Services;
+namespace PlcCore.Services;
 
 /// <summary>
 /// 存储组校验：建表/保存前必须全部通过，否则宁可不动数据库。

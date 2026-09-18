@@ -5,7 +5,8 @@ using LiveChartsCore;
 using LiveChartsCore.Defaults;
 using LiveChartsCore.SkiaSharpView;
 using LiveChartsCore.SkiaSharpView.Painting;
-using PlcHmi.Models;
+using PlcCore.Models;
+using PlcHmi.Services;
 using SkiaSharp;
 
 namespace PlcHmi.ViewModels;
@@ -50,11 +51,22 @@ public partial class TagViewModel : ObservableObject
             {
                 Labeler = value => new DateTime((long)value).ToString("HH:mm:ss"),
                 UnitWidth = TimeSpan.FromSeconds(1).Ticks,
-                TextSize = 11
+                TextSize = 11,
+                // 轴上的颜色不属于 WPF 资源，按当前主题取；切主题时卡片会重建一遍
+                LabelsPaint = new SolidColorPaint(AppTheme.ChartLabelColor),
+                SeparatorsPaint = new SolidColorPaint(AppTheme.ChartLineColor, 1)
             }
         ];
 
-        YAxes = [new Axis { TextSize = 11 }];
+        YAxes =
+        [
+            new Axis
+            {
+                TextSize = 11,
+                LabelsPaint = new SolidColorPaint(AppTheme.ChartLabelColor),
+                SeparatorsPaint = new SolidColorPaint(AppTheme.ChartLineColor, 1)
+            }
+        ];
     }
 
     public PlcTag Tag { get; }

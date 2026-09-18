@@ -1,8 +1,8 @@
 using NModbus;
 using PlcCore.Services;
-using PlcHmi.Models;
+using PlcCore.Models;
 
-namespace PlcHmi.Services;
+namespace PlcCore.Services;
 
 /// <summary>一个读取区段：从 Start 起连续读 Count 个寄存器。对应界面上一个存储组的区段。</summary>
 public sealed record ReadRange(ushort Start, ushort Count);

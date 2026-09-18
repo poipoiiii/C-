@@ -2,9 +2,9 @@ using System.IO;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using PlcHmi.Models;
+using PlcCore.Models;
 
-namespace PlcHmi.Services;
+namespace PlcCore.Services;
 
 /// <summary>
 /// 机型配置的读写：一个机型一份 data/configs/&lt;机型&gt;.json，是**现场副本** ——
@@ -25,10 +25,10 @@ public sealed class ConfigStore
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
-    private ConfigStore(string profile)
+    private ConfigStore(string profile, string filePath)
     {
         Profile = profile;
-        FilePath = PathFor(profile);
+        FilePath = filePath;
     }
 
     /// <summary>机型代号 → data/configs 下的配置文件路径</summary>
@@ -53,7 +53,17 @@ public sealed class ConfigStore
                 $"机型名不合法：{profile}（只能用中英文、数字、下划线、短横线，最长 32 个字符）", nameof(profile));
         }
 
-        return new ConfigStore(name);
+        return new ConfigStore(name, PathFor(name));
+    }
+
+    /// <summary>
+    /// 测试钩子：绕过 data/configs，直接对指定文件读写 —— 单测不能污染仓库里的现场配置。
+    /// 机型名按文件名推得，语义与 <see cref="Open"/> 一致。
+    /// </summary>
+    internal static ConfigStore OpenFile(string filePath)
+    {
+        string name = Path.GetFileNameWithoutExtension(filePath);
+        return new ConfigStore(name, filePath);
     }
 
     public static bool IsValidProfileName(string? name) => name is not null && ProfileNamePattern.IsMatch(name);

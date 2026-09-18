@@ -1,4 +1,4 @@
-namespace PlcHmi.Models;
+namespace PlcCore.Models;
 
 /// <summary>
 /// 本机档案（data/machine.json）：只装"这台设备"的东西 —— 机台号、连接与采集参数、当前机型。
@@ -25,4 +25,7 @@ public sealed class MachineProfile
 
     /// <summary>采集周期（毫秒）</summary>
     public int IntervalMs { get; set; } = 1000;
+
+    /// <summary>界面主题："Light" / "Dark"，跟着设备记着（控制室夜班常开暗色）</summary>
+    public string Theme { get; set; } = "Light";
 }

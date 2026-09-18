@@ -1,8 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- 要和 PlcHmi 的 TFM 一致才能引用它（WPF 项目带 windows 目标平台） -->
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>PlcTests</RootNamespace>
@@ -19,8 +18,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 只测纯逻辑：动态表拼 SQL、机型名校验、点位模型、换算。需要 Modbus 的时序测试等 PlcHmi 抽出接口后再加 -->
-    <ProjectReference Include="..\PlcHmi\PlcHmi.csproj" />
+    <!-- 只测纯逻辑：动态表拼 SQL、机型名校验、点位模型、换算。这些都在 PlcCore 里，无需引用 WPF 工程 -->
+    <ProjectReference Include="..\PlcCore\PlcCore.csproj" />
   </ItemGroup>
 
   <ItemGroup>

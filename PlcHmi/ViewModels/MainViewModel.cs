@@ -1,11 +1,10 @@
-using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using PlcCore.Services;
-using PlcHmi.Models;
+using PlcCore.Models;
 using PlcHmi.Services;
 using Serilog;
 
@@ -40,8 +39,12 @@ public partial class MainViewModel : ObservableObject
     /// <summary>当前机型的配置读写（一个实例对应一个机型）</summary>
     private ConfigStore _store;
 
-    private IModbusClient? _modbus;
-    private PlcAcquisitionService? _acquisition;
+    /// <summary>连接控制器：Modbus 链路的生命周期与连接参数（Ip/Port/SlaveId/IntervalMs）</summary>
+    private readonly ConnectionController _connection;
+
+    /// <summary>采集控制器：采集循环的生命周期与落库</summary>
+    private readonly AcquisitionController _acquisition;
+
     private TriggerWatchService? _triggerWatch;
 
     public MainViewModel() : this(AppServices.Default)
@@ -54,6 +57,11 @@ public partial class MainViewModel : ObservableObject
 
         // 机型：命令行 --config / --machine > 本机档案（机台号、上次选的机型）> 已有配置 > 已知机型第一个
         _machine = MachineStore.Load();
+
+        // 主题跟着本机档案走，先把配色装好；直接写字段，启动不该触发一次落盘
+        _isDarkTheme = string.Equals(_machine.Theme, "Dark", StringComparison.OrdinalIgnoreCase);
+        AppTheme.Apply(_isDarkTheme);
+
         string profile = ProfileResolver.Resolve(Environment.GetCommandLineArgs(), _machine);
         _config = LoadConfig(profile, out _store);
         MigrateMachineProfile();                     // 老配置里的机台号/连接参数搬进本机档案
@@ -81,6 +89,18 @@ public partial class MainViewModel : ObservableObject
             SaveMachineQuietly();
         }
 
+        // 连接与采集各一个控制器：链路生命周期 / 采集循环与落库都收在 PlcCore 里。
+        // 控制器不碰界面，状态用事件报回来；面向操作工的文案与日志留在这里
+        _connection = new ConnectionController(services, _machine);
+        _acquisition = new AcquisitionController(services, () => Config);
+        _connection.Connected += OnConnected;
+        _connection.ConnectFailed += OnConnectFailed;
+        _connection.Disconnected += OnDisconnected;
+        _connection.PersistFailed += OnConnectionPersistFailed;
+        _acquisition.BatchCompleted += OnBatchCompleted;
+        _acquisition.Failed += OnAcquisitionFailed;
+        _acquisition.PersistFailed += OnPersistFailed;
+
         // 四个页签各一个视图模型；它们都拿外壳当共享上下文
         Storage = new StorageViewModel(this, services);
         Dashboard = new DashboardViewModel(this, services);
@@ -106,7 +126,6 @@ public partial class MainViewModel : ObservableObject
 
         _ = Storage.RefreshTablesAsync();
         _ = Dashboard.RefreshRecordsAsync();
-        _ = ProbeSlavesAsync();   // 打开就探一遍从站，下拉框里直接可选
     }
 
     // ---------------- 共享上下文（给四个页签用） ----------------
@@ -118,7 +137,7 @@ public partial class MainViewModel : ObservableObject
     public ConfigStore Store => _store;
 
     /// <summary>已连接的 Modbus 客户端；没连接时为 null</summary>
-    public IModbusClient? Modbus => _modbus;
+    public IModbusClient? Modbus => _connection.Modbus;
 
     /// <summary>触发监听；没在监听时为 null（轮询间隔改这个对象的属性即可生效）</summary>
     public TriggerWatchService? TriggerWatch => _triggerWatch;
@@ -133,6 +152,20 @@ public partial class MainViewModel : ObservableObject
 
     // ---------------- 本机档案与机型 ----------------
 
+    /// <summary>暗色主题：勾上就换成暗色皮肤，选择记在本机档案里，下次开机照旧</summary>
+    [ObservableProperty] private bool _isDarkTheme;
+
+    partial void OnIsDarkThemeChanged(bool value)
+    {
+        AppTheme.Apply(value);
+
+        // 曲线坐标轴的颜色取自主题，卡片得按新配色重建一遍
+        Dashboard.Rebuild();
+
+        _machine.Theme = value ? "Dark" : "Light";
+        SaveMachineQuietly();
+    }
+
     /// <summary>
     /// 机台号：现场这台设备的编号（4 字母 + 3 数字，前 4 位决定机型）。
     /// 进项目时若为空，界面会弹框让用户填；**改它要输密码**（见 MainWindow 的 EditMachineNo_Click），
@@ -145,6 +178,12 @@ public partial class MainViewModel : ObservableObject
 
     /// <summary>还没填机台号：界面据此决定要不要弹输入框</summary>
     public bool NeedsMachineNo => string.IsNullOrWhiteSpace(MachineNo);
+
+    /// <summary>
+    /// 机台号还没填对（空着，或不是五个机型之一）：进项目时据此决定要不要弹输入框。
+    /// 正常路径下界面是硬校验的，只有手工改过的 machine.json 才可能带着一个认不出的号码进来。
+    /// </summary>
+    public bool NeedsMachineNoFix => !MachineModels.TryResolve(MachineNo, out _);
 
     /// <summary>左上角的大字：机台号</summary>
     public string MachineNoText => NeedsMachineNo ? "未填写" : MachineNo;
@@ -159,12 +198,11 @@ public partial class MainViewModel : ObservableObject
         {
             if (NeedsMachineNo)
             {
-                return "还没填机台号：点【改】填一下，前 4 位决定机型";
+                return "还没填机台号：点左上角大字填一下，前 4 位决定机型";
             }
 
-            return MachineModels.TryResolve(MachineNo, out _)
-                ? string.Empty
-                : $"认不出机型：机台号应为{MachineModels.FormatHint}（小写会自动转大写）";
+            // 机台号是硬校验的（只能是五个机型之一），走到这里的只可能是手工改过的 machine.json
+            return MachineModels.TryResolve(MachineNo, out _) ? string.Empty : MachineModels.RequirementHint;
         }
     }
 
@@ -181,9 +219,13 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>机台号大字的悬停说明：机型信息挪到提示里，界面上只留大字</summary>
+    public string MachineNoTooltip => $"{MachineModelText}\n点击大字即可修改（改动需要密码）";
+
     /// <summary>
     /// 机台号改了：小写补成大写、存进本机档案，并按前 4 位切到对应机型（AIXP999 → AIXP）。
-    /// 认不出机型不切、只标黄提示 —— 机型不给手工选，所以这时候维持当前机型继续跑。
+    /// 界面是硬校验的（只能是五个机型之一），所以这里认不出机型的分支只是兜底：
+    /// 手工改过 machine.json 才会走到，那时不切机型、维持当前机型继续跑。
     /// </summary>
     partial void OnMachineNoChanged(string value)
     {
@@ -221,6 +263,7 @@ public partial class MainViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(MachineNoText));
         OnPropertyChanged(nameof(MachineModelText));
+        OnPropertyChanged(nameof(MachineNoTooltip));
         OnPropertyChanged(nameof(MachineNoHint));
         OnPropertyChanged(nameof(HasMachineNoProblem));
         OnPropertyChanged(nameof(NeedsMachineNo));
@@ -390,6 +433,28 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private int _port = 5020;
     [ObservableProperty] private byte _slaveId = 1;
 
+    /// <summary>顶栏「PLC 通信」分区的摘要；参数在配置弹窗里一次填完，这里只展示</summary>
+    public string PlcConfigSummary => $"{Ip}:{Port} · 从站 {SlaveId} · {IntervalMs} ms/次";
+
+    private void NotifyPlcConfigSummary() => OnPropertyChanged(nameof(PlcConfigSummary));
+
+    /// <summary>
+    /// 把界面上这几个可观察属性同步给连接控制器：参数由控制器持有（连接、探测、写本机档案都用它那一份），
+    /// 界面绑定的仍是这里的属性，改哪个都从这几处收口，两边不会走岔。
+    /// </summary>
+    private void SyncConnectionConfig()
+    {
+        NotifyPlcConfigSummary();
+        _connection.Ip = Ip;
+        _connection.Port = Port;
+        _connection.SlaveId = SlaveId;
+        _connection.IntervalMs = IntervalMs;
+    }
+
+    partial void OnIpChanged(string value) => SyncConnectionConfig();
+
+    partial void OnPortChanged(int value) => SyncConnectionConfig();
+
     /// <summary>
     /// 从站号输入框绑的是文本，不是 byte：直接绑 byte 的话边打字边转换，
     /// 中间态（比如只打了半个数字）会弹红色的“未能转换值”校验错误。
@@ -407,6 +472,11 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _statusText = "未连接";
     [ObservableProperty] private string _commError = string.Empty;
     [ObservableProperty] private string _persistError = string.Empty;
+
+    /// <summary>有通信/连接错误：顶栏状态那行据此标红提醒</summary>
+    public bool HasCommError => CommError.Length > 0;
+
+    partial void OnCommErrorChanged(string value) => OnPropertyChanged(nameof(HasCommError));
 
     /// <summary>
     /// 工具条上就两个开关，勾选状态即系统状态（勾上=已连接 / 采集中），按钮文字写的是"点下去会发生什么"（连接↔断开、开始采集↔停止采集）。
@@ -428,7 +498,7 @@ public partial class MainViewModel : ObservableObject
 
         if (value)
         {
-            ConnectInternal();
+            _connection.Connect();
         }
         else
         {
@@ -453,9 +523,17 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    partial void OnIsConnectedChanged(bool value) => SyncSwitches();
+    partial void OnIsConnectedChanged(bool value)
+    {
+        SyncSwitches();
+        NotifyControlAvailability();
+    }
 
-    partial void OnIsAcquiringChanged(bool value) => SyncSwitches();
+    partial void OnIsAcquiringChanged(bool value)
+    {
+        SyncSwitches();
+        NotifyControlAvailability();
+    }
 
     /// <summary>把两个开关拨到与当前状态一致（动作没生效时靠它把开关还原）</summary>
     private void SyncSwitches()
@@ -477,38 +555,35 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 连接 PLC（切换从站后也走这里重连）。只建链路，不自动开采集 —— 采集由采集开关单独控制，
-    /// 免得连上就往库里写数据。
-    /// </summary>
-    private void ConnectInternal()
+    /// <summary>连上了（含换从站后的重连）：状态栏与日志在这里收口</summary>
+    private void OnConnected()
     {
-        try
-        {
-            _modbus = _services.CreateModbusClient(SlaveId);
-            _modbus.Connect(Ip, Port);
-
-            IsConnected = true;
-            CommError = string.Empty;
-            StatusText = $"已连接 {Ip}:{Port}（从站 {SlaveId}）· 未采集";
-            Log.Information("已连接 PLC：{Ip}:{Port}（从站 {SlaveId}）", Ip, Port, SlaveId);
-            PersistConnectionConfig();
-        }
-        catch (Exception ex)
-        {
-            _modbus?.Dispose();
-            _modbus = null;
-            IsConnected = false;
-            StatusText = "连接失败";
-            CommError = $"连接失败：{ex.Message}";
-            Log.Error(ex, "连接 PLC 失败：{Ip}:{Port}（从站 {SlaveId}）", Ip, Port, SlaveId);
-
-            // 连不上时 IsConnected 没变过，不会触发状态回写，开关得手动拨回来
-            SyncSwitches();
-        }
+        IsConnected = true;
+        CommError = string.Empty;
+        StatusText = $"已连接 {Ip}:{Port}（从站 {SlaveId}）· 未采集";
+        Log.Information("已连接 PLC：{Ip}:{Port}（从站 {SlaveId}）", Ip, Port, SlaveId);
     }
 
-    /// <summary>把本机档案里的连接参数填回界面（启动时用；切机型不动它们）</summary>
+    /// <summary>连接失败：链路已经清掉，这里只提示并记日志</summary>
+    private void OnConnectFailed(Exception ex)
+    {
+        IsConnected = false;
+        StatusText = "连接失败";
+        CommError = $"连接失败：{ex.Message}";
+        Log.Error(ex, "连接 PLC 失败：{Ip}:{Port}（从站 {SlaveId}）", Ip, Port, SlaveId);
+
+        // 连不上时 IsConnected 没变过，不会触发状态回写，开关得手动拨回来
+        SyncSwitches();
+    }
+
+    /// <summary>连接参数落盘失败：只在状态栏提示，不打断连接</summary>
+    private void OnConnectionPersistFailed(Exception ex)
+    {
+        StatusText = $"本机档案保存失败：{ex.Message}";
+        Log.Error(ex, "本机档案保存失败：{File}", AppPaths.MachineFile);
+    }
+
+    /// <summary>把本机档案里的连接参数填回界面（启动时用；切机型不动它们）。同步给连接控制器由属性变更处理器负责</summary>
     private void ApplyConnectionConfig()
     {
         Ip = _machine.Ip;
@@ -521,24 +596,17 @@ public partial class MainViewModel : ObservableObject
         SlaveIdText = _machine.SlaveId.ToString();
     }
 
-    /// <summary>连接参数写进本机档案：连上一次就记住，下次启动不用重填（跟着设备走，不跟着机型走）</summary>
-    private void PersistConnectionConfig()
-    {
-        _machine.Ip = Ip;
-        _machine.Port = Port;
-        _machine.SlaveId = SlaveId;
-        _machine.IntervalMs = IntervalMs;
-        SaveMachineQuietly();
-    }
-
     /// <summary>断开：停采集（连带触发监听）+ 断链路</summary>
     private async Task DisconnectAsync()
     {
         await StopAcquisitionAsync();
         Scan.CancelIfScanning();
-        _modbus?.Dispose();
-        _modbus = null;
+        _connection.Disconnect();
+    }
 
+    /// <summary>链路断开了：状态栏、卡片标灰与日志在这里收口</summary>
+    private void OnDisconnected()
+    {
         IsConnected = false;
         StatusText = "已断开";
         Dashboard.MarkAllOffline();
@@ -549,54 +617,98 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty] private string _slaveProbeStatus = "未探测";
 
+    /// <summary>探测/从站号有问题：配置弹窗里那行提示据此标红</summary>
+    [ObservableProperty] private bool _slaveProbeFailed;
+
+    /// <summary>
+    /// 从站是否配置成功：从站号是 1~247 的整数，且最近一次探测没判失败。
+    /// 没配好之前【连接】【开始采集】【写入数据库】一律点不动 —— 拿一个错的从站号去连、去写库，
+    /// 轻则白折腾，重则把数据写到别的设备上去。恢复办法：点【配置…】重新探测到从站即可。
+    /// </summary>
+    public bool IsSlaveReady => !SlaveProbeFailed && IsValidSlaveId(SlaveIdText);
+
+    /// <summary>开始采集的前提：链路已连上，且从站配置是好的</summary>
+    public bool CanAcquire => IsConnected && IsSlaveReady;
+
+    // 下面三个是"开关能不能点"。都带上"已经处于该状态就永远能点"（IsConnected / IsAcquiring）：
+    // 否则从站配置在运行中判失败时，会把【断开】【停止采集】一起锁死，连停都停不下来。
+    public bool CanToggleConnection => IsConnected || IsSlaveReady;
+
+    public bool CanToggleAcquisition => IsAcquiring || CanAcquire;
+
+    public bool CanTogglePersist => IsAcquiring || IsSlaveReady;
+
+    /// <summary>从站配置 / 连接 / 采集中任一变化，三个开关的可用性都要重算</summary>
+    private void NotifyControlAvailability()
+    {
+        OnPropertyChanged(nameof(IsSlaveReady));
+        OnPropertyChanged(nameof(CanAcquire));
+        OnPropertyChanged(nameof(CanToggleConnection));
+        OnPropertyChanged(nameof(CanToggleAcquisition));
+        OnPropertyChanged(nameof(CanTogglePersist));
+    }
+
+    partial void OnSlaveProbeFailedChanged(bool value) => NotifyControlAvailability();
+
+    /// <summary>从站号是否合法（1~247 的整数）：解析规则只此一处，界面提示与能否操作都以它为准</summary>
+    private static bool IsValidSlaveId(string? text, out byte unitId) =>
+        byte.TryParse(text?.Trim(), out unitId) && unitId is >= 1 and <= 247;
+
+    private static bool IsValidSlaveId(string? text) => IsValidSlaveId(text, out _);
+
+    /// <summary>
+    /// 配置弹窗点了【确定】：用户已经确认这组连接参数，先前探测失败的标记清掉。
+    /// 首次配置时 PLC 常常还没上电（探测必然失败），不留这个出口的话，
+    /// 界面会被卡死在"从站未配置成功"，连试连一下都做不到。
+    /// </summary>
+    public void ConfirmPlcConfig()
+    {
+        SlaveProbeFailed = false;
+        SlaveProbeStatus = "配置已确认";
+    }
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ProbeSlavesCommand))]
     private bool _isProbing;
 
-    /// <summary>探测到的从站号，供工具栏下拉框选择</summary>
-    public ObservableCollection<byte> SlaveIds { get; } = [];
-
     private bool CanProbeSlaves() => !IsProbing;
 
-    /// <summary>探测同一 IP:端口 下有哪些从站号在响应，结果填进下拉框</summary>
+    /// <summary>探测同一 IP:端口 下有哪些从站号在响应，结果填进从站号框（配置弹窗的【探测从站】）</summary>
     [RelayCommand(CanExecute = nameof(CanProbeSlaves))]
     private async Task ProbeSlavesAsync()
     {
         IsProbing = true;
+        SlaveProbeFailed = false;
         SlaveProbeStatus = $"探测中：从站 {ProbeStartId}~{ProbeEndId}，每个超时 {ProbeTimeoutMs} ms";
 
         try
         {
             var progress = new Progress<string>(message => SlaveProbeStatus = message);
-            var results = await _services.ProbeService.ProbeAsync(
-                Ip, Port, ProbeStartId, ProbeEndId, ProbeTimeoutMs, progress, CancellationToken.None);
+            var results = await _connection.ProbeAsync(
+                ProbeStartId, ProbeEndId, ProbeTimeoutMs, progress, CancellationToken.None);
 
             var found = results.Where(r => r.Responded).Select(r => r.UnitId).ToList();
-
-            SlaveIds.Clear();
-            foreach (var unitId in found)
-            {
-                SlaveIds.Add(unitId);
-            }
 
             if (found.Count == 0)
             {
                 var reason = results.FirstOrDefault(r => r.UnitId == ProbeStartId)?.Detail ?? "无响应";
                 SlaveProbeStatus = $"未发现从站（从站 {ProbeStartId}：{reason}），检查 IP/端口";
+                SlaveProbeFailed = true;
                 return;
             }
-
-            SlaveProbeStatus = $"发现 {found.Count} 个从站：{string.Join("、", found)}";
 
             // 当前选中的从站不在列表里（或还没选），自动切到第一个可用从站
             if (!found.Contains(SlaveId))
             {
                 SelectSlave(found[0]);
             }
+
+            SlaveProbeStatus = $"发现 {found.Count} 个从站：{string.Join("、", found)}，当前用 {SlaveId}";
         }
         catch (Exception ex)
         {
             SlaveProbeStatus = $"探测失败：{ex.Message}";
+            SlaveProbeFailed = true;
         }
         finally
         {
@@ -610,17 +722,21 @@ public partial class MainViewModel : ObservableObject
         SlaveId = unitId;
         SlaveIdText = unitId.ToString();
         SlaveProbeStatus = $"已切换到从站 {unitId}";
+        SlaveProbeFailed = false;
     }
 
-    /// <summary>从站号文本变化：能解析成合法从站号才生效，否则只在状态栏提示，界面不标红</summary>
+    /// <summary>从站号文本变化：能解析成合法从站号才生效，否则只在提示里标红，不改当前从站</summary>
     partial void OnSlaveIdTextChanged(string value)
     {
+        NotifyControlAvailability();   // 号码一变，能不能操作就得重新判一次
+
         var text = value?.Trim() ?? string.Empty;
-        if (!byte.TryParse(text, out byte unitId) || unitId < 1 || unitId > 247)
+        if (!IsValidSlaveId(text, out byte unitId))
         {
             if (text.Length > 0)
             {
                 SlaveProbeStatus = $"从站号「{text}」不合法：应为 1~247 的整数";
+                SlaveProbeFailed = true;
             }
 
             return;
@@ -634,6 +750,8 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnSlaveIdChanged(byte value)
     {
+        SyncConnectionConfig();
+
         if (!IsConnected)
         {
             return;
@@ -649,11 +767,7 @@ public partial class MainViewModel : ObservableObject
         bool wasAcquiring = IsAcquiring;
 
         await StopAcquisitionAsync();
-        _modbus?.Dispose();
-        _modbus = null;
-        IsConnected = false;
-
-        ConnectInternal();
+        _connection.Reconnect();
 
         if (wasAcquiring)
         {
@@ -666,7 +780,8 @@ public partial class MainViewModel : ObservableObject
     /// <summary>开始采集：采集循环 + 触发监听一起起来（没有启用的规则时监听自己会跳过）</summary>
     private void StartAcquisition()
     {
-        if (_modbus is null || IsAcquiring || _config.Tags.Count == 0)
+        var modbus = _connection.Modbus;
+        if (modbus is null || IsAcquiring || _config.Tags.Count == 0)
         {
             if (_config.Tags.Count == 0)
             {
@@ -677,16 +792,7 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
-        _acquisition = new PlcAcquisitionService(_modbus, [.. _config.Tags], BuildReadRanges())
-        {
-            IntervalMs = IntervalMs,
-            PersistEnabled = PersistEnabled,
-            PersistAsync = PersistBatchAsync
-        };
-        _acquisition.BatchCompleted += OnBatchCompleted;
-        _acquisition.Failed += OnAcquisitionFailed;
-        _acquisition.PersistFailed += OnPersistFailed;
-        _acquisition.Start();
+        _acquisition.Start(modbus);
 
         IsAcquiring = true;
         StatusText = PersistEnabled
@@ -707,17 +813,10 @@ public partial class MainViewModel : ObservableObject
     {
         await StopTriggerWatchAsync();
 
-        if (_acquisition is null)
+        if (!await _acquisition.StopAsync())
         {
             return;
         }
-
-        var service = _acquisition;
-        _acquisition = null;
-        service.BatchCompleted -= OnBatchCompleted;
-        service.Failed -= OnAcquisitionFailed;
-        service.PersistFailed -= OnPersistFailed;
-        await service.StopAsync();
 
         IsAcquiring = false;
         StatusText = IsConnected ? "已连接（未采集）" : "已断开";
@@ -759,8 +858,19 @@ public partial class MainViewModel : ObservableObject
     }
 
     /// <summary>采集失败（通信层）：只上报错误并标灰，循环继续，界面不受影响</summary>
-    private void OnAcquisitionFailed(string message)
+    private void OnAcquisitionFailed(string message) => OnTransportFailed("采集失败（传输层）", message);
+
+    /// <summary>触发监听的传输层故障（采集与监听共用一条链路，通常是一起断的），日志里分开记</summary>
+    private void OnTriggerWatchFailed(string message) => OnTransportFailed("触发监听失败（传输层）", message);
+
+    /// <summary>
+    /// 传输层故障（断线、PLC 重启）：先落一条 ERROR —— 无人值守时事后只能从 data/logs/ 里查这一段；
+    /// 再在界面上提示并标灰。一次故障只记一条，点位级明细不进日志，免得刷屏。
+    /// </summary>
+    private void OnTransportFailed(string source, string message)
     {
+        Log.Error("{Source}：{Message}", source, message);
+
         _dispatcher.BeginInvoke(() =>
         {
             CommError = $"采集失败：{message}";
@@ -780,68 +890,15 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnIntervalMsChanged(int value)
     {
-        if (_acquisition is not null)
+        SyncConnectionConfig();
+
+        if (_acquisition.ApplyIntervalMs(value))
         {
-            _acquisition.IntervalMs = value;
             StatusText = $"采集中：{value} ms/次（采集周期已调整）";
         }
     }
 
-    partial void OnPersistEnabledChanged(bool value)
-    {
-        if (_acquisition is not null)
-        {
-            _acquisition.PersistEnabled = value;
-        }
-    }
-
-    /// <summary>交给采集循环的读取区段：只取真有点位的组，空区段读回来也没地方写</summary>
-    private IReadOnlyList<ReadRange> BuildReadRanges() =>
-        [.. _config.Groups
-            .Where(g => g.Count > 0 && _config.Tags.Any(t => g.Covers(t.Address)))
-            .OrderBy(g => g.StartAddress)
-            .Select(g => new ReadRange(g.StartAddress, g.Count))];
-
-    /// <summary>
-    /// 按存储组把一批数据拆开，各组并发写自己的目标表。
-    /// 归组看地址落在哪个区段（用生效配置，不看界面上那份草稿）；
-    /// 并发写是为了让慢的那张表不拖住其它组。
-    /// </summary>
-    private async Task PersistBatchAsync(IReadOnlyList<Sample> batch)
-    {
-        var jobs = new List<Task>();
-
-        foreach (var group in _config.Groups)
-        {
-            if (group.Count == 0)
-            {
-                continue;
-            }
-
-            var samples = batch.Where(s => group.Covers(s.Tag.Address)).ToList();
-            if (samples.Count == 0)
-            {
-                continue;
-            }
-
-            jobs.Add(group.Mode == StorageMode.Wide
-                ? _services.TableStore.InsertWideAsync(group.TableName, samples, group.Shape)
-                : _services.TableStore.InsertLongAsync(group.TableName, samples, group.Shape));
-        }
-
-        if (jobs.Count > 0)
-        {
-            await Task.WhenAll(jobs);
-        }
-
-        // 正常情况下采集只会读区段内的点位，走不到这里；真出现说明区段在采集中被改过，提醒一句
-        int orphan = batch.Count(s => !_config.Groups.Any(g => g.Covers(s.Tag.Address)));
-        if (orphan > 0)
-        {
-            throw new InvalidOperationException(
-                $"有 {orphan} 个采样点不在任何存储组的区段内，没地方落库。去「存储映射」页调整区段范围。");
-        }
-    }
+    partial void OnPersistEnabledChanged(bool value) => _acquisition.ApplyPersistEnabled(value);
 
     private async Task RestartAcquisitionAsync()
     {
@@ -853,20 +910,21 @@ public partial class MainViewModel : ObservableObject
 
     private void StartTriggerWatch()
     {
-        if (_modbus is null || _triggerWatch is not null || !_config.Triggers.Any(t => t.Enabled))
+        var modbus = _connection.Modbus;
+        if (modbus is null || _triggerWatch is not null || !_config.Triggers.Any(t => t.Enabled))
         {
             Trigger.OnWatchSkipped();
             return;
         }
 
-        _triggerWatch = new TriggerWatchService(_modbus, [.. _config.Triggers])
+        _triggerWatch = new TriggerWatchService(modbus, [.. _config.Triggers])
         {
             PollIntervalMs = Trigger.TriggerPollIntervalMs
         };
         _triggerWatch.Triggered += Trigger.OnTriggered;
         _triggerWatch.HandshakeCompleted += Trigger.OnHandshakeCompleted;
         _triggerWatch.Alarm += Trigger.OnAlarm;
-        _triggerWatch.Failed += OnAcquisitionFailed;
+        _triggerWatch.Failed += OnTriggerWatchFailed;
         _triggerWatch.Start();
 
         Trigger.OnWatchStarted();
@@ -885,7 +943,7 @@ public partial class MainViewModel : ObservableObject
         service.Triggered -= Trigger.OnTriggered;
         service.HandshakeCompleted -= Trigger.OnHandshakeCompleted;
         service.Alarm -= Trigger.OnAlarm;
-        service.Failed -= OnAcquisitionFailed;
+        service.Failed -= OnTriggerWatchFailed;
         await service.StopAsync();
         service.Dispose();
 
@@ -925,8 +983,8 @@ public partial class MainViewModel : ObservableObject
         Dashboard.Stop();
         Trigger.Stop();
         Scan.CancelIfScanning();
-        _acquisition?.Dispose();
+        _acquisition.Dispose();
         _triggerWatch?.Dispose();
-        _modbus?.Dispose();
+        _connection.Dispose();
     }
 }

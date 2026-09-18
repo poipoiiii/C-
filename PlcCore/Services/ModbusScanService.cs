@@ -1,8 +1,8 @@
 using NModbus;
 using PlcCore.Services;
-using PlcHmi.Models;
+using PlcCore.Models;
 
-namespace PlcHmi.Services;
+namespace PlcCore.Services;
 
 /// <summary>
 /// 寄存器扫描：Modbus 没有“列出所有点位”的指令，只能试读。

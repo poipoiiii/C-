@@ -1,43 +1,25 @@
 using System.Windows;
+using PlcCore.Models;
 
 namespace PlcHmi;
 
 /// <summary>
-/// 机台号输入窗：进项目时问一次（<c>requirePassword: false</c>），
-/// 以后要改则要输密码（<c>requirePassword: true</c>）—— 改机台号会连带换机型，不能让它随手被改。
+/// 机台号输入窗：进项目时问一次（机台号为空时）。
+/// 以后再改不用开这个窗 —— 直接点主界面左上角的大字就地改，改动仍要过 <see cref="PasswordWindow"/>。
 /// </summary>
 public partial class MachineNoWindow : Window
 {
-    /// <summary>
-    /// 改机台号要输的密码。说明白：这是**防误改**的软门槛（现场随手改会把机型也换掉），
-    /// 不是安全机制 —— 客户端里的常量挡不住有心人。
-    /// </summary>
-    private const string EditPassword = "shjie12345";
-
-    private readonly bool _requirePassword;
-
-    public MachineNoWindow(string profile, string current, bool requirePassword)
+    public MachineNoWindow(string profile, string current)
     {
         InitializeComponent();
 
-        _requirePassword = requirePassword;
-
-        Title = requirePassword ? "修改机台号" : "填写机台号";
-        ProfileHint.Text = $"（机型「{profile}」）";
+        Header.Hint = $"（机型「{profile}」）";
         MachineNoBox.Text = current;
-        PasswordRow.Visibility = requirePassword ? Visibility.Visible : Visibility.Collapsed;
 
         Loaded += (_, _) =>
         {
-            if (requirePassword)
-            {
-                PasswordInput.Focus();
-            }
-            else
-            {
-                MachineNoBox.Focus();
-                MachineNoBox.SelectAll();
-            }
+            MachineNoBox.Focus();
+            MachineNoBox.SelectAll();
         };
     }
 
@@ -46,13 +28,22 @@ public partial class MachineNoWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
-        if (_requirePassword && PasswordInput.Password != EditPassword)
+        string machineNo = MachineNoBox.Text.Trim();
+        if (machineNo.Length == 0)
         {
-            ShowError("密码不对，改不了机台号");
+            ShowError("机台号不能为空：前 4 位决定机型，写触发记录也靠它");
             return;
         }
 
-        MachineNo = MachineNoBox.Text.Trim();
+        // 硬校验：前 4 位必须是五个已知机型代号之一，认不出来就不放行 ——
+        // 认不出机型就等于不知道该加载哪份点位配置，宁可让用户当场改对
+        if (!MachineModels.TryResolve(machineNo, out _))
+        {
+            ShowError(MachineModels.RequirementHint);
+            return;
+        }
+
+        MachineNo = MachineModels.Normalize(machineNo);
         DialogResult = true;
     }
 

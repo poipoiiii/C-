@@ -1,35 +1,69 @@
 <Application x:Class="PlcHmi.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:PlcHmi.Controls"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <!-- HandyControl 皮肤与主题 -->
+                <!-- 顺序有讲究：先 HC 皮肤（配色）再 HC 控件样式；最后是本应用调色板，
+                     它用同名 Color 键覆盖 HC 的主色，让 HC 按钮与本应用的强调色变成同一支蓝。
+                     运行时切亮/暗会整份重建这三项（见 Services/AppTheme.cs） -->
                 <ResourceDictionary Source="pack://application:,,,/HandyControl;component/Themes/SkinDefault.xaml" />
                 <ResourceDictionary Source="pack://application:,,,/HandyControl;component/Themes/Theme.xaml" />
+                <ResourceDictionary Source="Themes/PaletteLight.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
-            <!-- 下面是全应用共用的样式：主窗口与「表记录历史」弹窗都用同一套，放在这里两边才都能 StaticResource 到 -->
+            <!-- 下面是全应用共用的样式：主窗口与各弹窗都用同一套。
+                 颜色一律走 DynamicResource 引用 App.* 画刷，切主题时才会跟着换 -->
 
             <!-- 分区标题 / 说明 -->
             <Style x:Key="SectionTitle" TargetType="TextBlock">
                 <Setter Property="FontSize" Value="14" />
                 <Setter Property="FontWeight" Value="Bold" />
-                <Setter Property="Foreground" Value="#303133" />
+                <Setter Property="Foreground" Value="{DynamicResource App.Text.Primary}" />
                 <Setter Property="VerticalAlignment" Value="Center" />
             </Style>
             <Style x:Key="SectionHint" TargetType="TextBlock">
                 <Setter Property="FontSize" Value="12" />
-                <Setter Property="Foreground" Value="#909399" />
+                <Setter Property="Foreground" Value="{DynamicResource App.Text.Secondary}" />
                 <Setter Property="VerticalAlignment" Value="Center" />
                 <Setter Property="Margin" Value="10,0,0,0" />
             </Style>
             <Style x:Key="Divider" TargetType="Rectangle">
                 <Setter Property="Width" Value="1" />
                 <Setter Property="Height" Value="24" />
-                <Setter Property="Fill" Value="#EBEEF5" />
+                <Setter Property="Fill" Value="{DynamicResource App.Border}" />
                 <Setter Property="Margin" Value="14,0" />
+            </Style>
+
+            <!-- 「竖条 + 标题 + 灰提示」三件套：全应用一个模板，不用每处重写 -->
+            <Style TargetType="{x:Type controls:SectionHeader}">
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="{x:Type controls:SectionHeader}">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Rectangle Width="3" Height="16" RadiusX="1.5" RadiusY="1.5"
+                                           VerticalAlignment="Center" Margin="0,0,8,0"
+                                           Fill="{Binding Accent, RelativeSource={RelativeSource TemplatedParent}}" />
+                                <TextBlock x:Name="TitleText" Style="{StaticResource SectionTitle}"
+                                           Text="{Binding Title, RelativeSource={RelativeSource TemplatedParent}}" />
+                                <TextBlock x:Name="HintText" Style="{StaticResource SectionHint}"
+                                           Text="{Binding Hint, RelativeSource={RelativeSource TemplatedParent}}" />
+                            </StackPanel>
+                            <ControlTemplate.Triggers>
+                                <!-- 没有说明文字就整段收起，免得留一段空白 -->
+                                <Trigger Property="Hint" Value="">
+                                    <Setter TargetName="HintText" Property="Visibility" Value="Collapsed" />
+                                </Trigger>
+                                <Trigger Property="Hint" Value="{x:Null}">
+                                    <Setter TargetName="HintText" Property="Visibility" Value="Collapsed" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
             </Style>
 
             <!-- 数据表统一样式：行高、斑马纹、横向细线 -->
@@ -43,13 +77,13 @@
                 <Setter Property="RowHeight" Value="34" />
                 <Setter Property="ColumnHeaderHeight" Value="36" />
                 <Setter Property="FontSize" Value="13" />
-                <Setter Property="Background" Value="White" />
-                <Setter Property="RowBackground" Value="White" />
-                <Setter Property="AlternatingRowBackground" Value="#FAFBFC" />
-                <Setter Property="BorderBrush" Value="#EBEEF5" />
+                <Setter Property="Background" Value="{DynamicResource App.Surface}" />
+                <Setter Property="RowBackground" Value="{DynamicResource App.Surface}" />
+                <Setter Property="AlternatingRowBackground" Value="{DynamicResource App.Surface.Subtle}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource App.Border}" />
                 <Setter Property="BorderThickness" Value="1" />
                 <Setter Property="GridLinesVisibility" Value="Horizontal" />
-                <Setter Property="HorizontalGridLinesBrush" Value="#F0F2F5" />
+                <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource App.Border.Light}" />
                 <Setter Property="HeadersVisibility" Value="Column" />
                 <Setter Property="CanUserAddRows" Value="False" />
                 <Setter Property="CanUserResizeRows" Value="False" />
@@ -71,11 +105,92 @@
                 <Setter Property="FontFamily" Value="Consolas" />
             </Style>
 
-            <!-- 状态栏提示块 -->
+            <!-- 状态栏提示块：底色按语义给，形状统一走这里 -->
             <Style x:Key="StatusChip" TargetType="Border">
                 <Setter Property="CornerRadius" Value="3" />
                 <Setter Property="Padding" Value="10,5" />
                 <Setter Property="Margin" Value="8,0,0,0" />
+            </Style>
+
+            <!-- 表单左边的字段名（配置弹窗用），与右侧 32 高的输入框顶对齐 -->
+            <Style x:Key="FieldLabel" TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{DynamicResource App.Text.Regular}" />
+                <Setter Property="VerticalAlignment" Value="Top" />
+                <Setter Property="Margin" Value="0,8,12,0" />
+            </Style>
+
+            <!-- 顶栏的功能分区框：通信配置 / 连接 / 采集 各占一格，视觉上彼此分开 -->
+            <Style x:Key="ZoneBox" TargetType="Border">
+                <Setter Property="CornerRadius" Value="6" />
+                <Setter Property="Padding" Value="14,10" />
+                <Setter Property="Margin" Value="0,0,12,0" />
+                <Setter Property="Background" Value="{DynamicResource App.Surface.Subtle}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource App.Border}" />
+                <Setter Property="BorderThickness" Value="1" />
+            </Style>
+
+            <!-- ==================== 页签：下划线胶囊式 ==================== -->
+            <!-- 去掉默认方框边框：选中项淡蓝底 + 主色下划线，未选中只 hover 变色 -->
+            <Style x:Key="PillTabItem" TargetType="TabItem">
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="Foreground" Value="{DynamicResource App.Text.Regular}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="TabItem">
+                            <Border x:Name="Bd" Background="Transparent" CornerRadius="6,6,0,0"
+                                    Padding="18,9,18,0" Margin="0,0,4,0" Cursor="Hand">
+                                <StackPanel>
+                                    <ContentPresenter ContentSource="Header" HorizontalAlignment="Center"
+                                                      TextElement.Foreground="{TemplateBinding Foreground}" />
+                                    <Rectangle x:Name="Underline" Height="3" RadiusX="1.5" RadiusY="1.5"
+                                               Fill="Transparent" Margin="0,8,0,0" />
+                                </StackPanel>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="Background"
+                                            Value="{DynamicResource App.Surface.Hover}" />
+                                </Trigger>
+                                <!-- 放最后：同时 hover + 选中时以选中态为准 -->
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Foreground" Value="{DynamicResource App.Accent}" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                    <Setter TargetName="Bd" Property="Background"
+                                            Value="{DynamicResource App.Accent.Soft}" />
+                                    <Setter TargetName="Underline" Property="Fill"
+                                            Value="{DynamicResource App.Accent}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="PillTabControl" TargetType="TabControl">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="ItemContainerStyle" Value="{StaticResource PillTabItem}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="TabControl">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <!-- 表头那条贯穿的分隔线，页签下划线正好压在它上面 -->
+                                <Border Grid.Row="0" BorderThickness="0,0,0,1" Padding="4,0,0,0"
+                                        BorderBrush="{DynamicResource App.Border}">
+                                    <TabPanel IsItemsHost="True" Background="Transparent"
+                                              HorizontalAlignment="Left" />
+                                </Border>
+                                <Border Grid.Row="1" Padding="0,10,0,0">
+                                    <ContentPresenter ContentSource="SelectedContent" />
+                                </Border>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
             </Style>
         </ResourceDictionary>
     </Application.Resources>

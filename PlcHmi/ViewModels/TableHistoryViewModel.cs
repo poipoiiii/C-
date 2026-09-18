@@ -1,7 +1,7 @@
 using System.Data;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using PlcHmi.Services;
+using PlcCore.Services;
 
 namespace PlcHmi.ViewModels;
 

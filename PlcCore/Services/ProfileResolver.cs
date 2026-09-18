@@ -1,6 +1,6 @@
-using PlcHmi.Models;
+using PlcCore.Models;
 
-namespace PlcHmi.Services;
+namespace PlcCore.Services;
 
 /// <summary>
 /// 启动时决定用哪个机型。顺序（前面的赢）：

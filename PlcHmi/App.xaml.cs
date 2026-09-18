@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using DotNetEnv;
+using PlcCore.Services;
 using PlcHmi.Services;
 using Serilog;
 

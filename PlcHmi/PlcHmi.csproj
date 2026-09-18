@@ -32,9 +32,4 @@
     <ProjectReference Include="..\PlcCore\PlcCore.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- 纯逻辑（拼 SQL 工具、换算公式）是 internal 的，放开给测试工程 -->
-    <InternalsVisibleTo Include="PlcTests" />
-  </ItemGroup>
-
 </Project>

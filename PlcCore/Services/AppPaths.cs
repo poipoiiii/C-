@@ -1,6 +1,6 @@
 using System.IO;
 
-namespace PlcHmi.Services;
+namespace PlcCore.Services;
 
 /// <summary>
 /// 运行期目录布局：所有产物收在**一个根目录** <c>data/</c> 下，再按用途分子目录，

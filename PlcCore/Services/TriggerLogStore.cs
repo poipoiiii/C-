@@ -1,7 +1,7 @@
 using System.Data;
-using PlcHmi.Models;
+using PlcCore.Models;
 
-namespace PlcHmi.Services;
+namespace PlcCore.Services;
 
 /// <summary>
 /// 触发记录表：结构固定（时间戳 + 机台号 + 规则名 + 信号/应答地址），所以不走动态表那套按点位建列的机制，

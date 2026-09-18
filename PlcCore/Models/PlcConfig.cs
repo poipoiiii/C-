@@ -2,7 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
 using CommunityToolkit.Mvvm.ComponentModel;
 
-namespace PlcHmi.Models;
+namespace PlcCore.Models;
 
 /// <summary>落库结构：长表（一行一个点位）/ 宽表（一行一个时刻，点位成列）</summary>
 public enum StorageMode

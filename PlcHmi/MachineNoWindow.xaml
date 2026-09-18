@@ -1,48 +1,38 @@
 <Window x:Class="PlcHmi.MachineNoWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="机台号" Height="260" Width="460"
+        xmlns:controls="clr-namespace:PlcHmi.Controls"
+        Title="填写机台号" Width="460" SizeToContent="Height"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
         FontFamily="Microsoft YaHei UI" FontSize="13"
         TextOptions.TextFormattingMode="Display"
         Background="{DynamicResource RegionBrush}">
-    <!-- 进项目时问一次机台号；之后要改得输密码（改机台号会连带换机型，不能让现场随手改） -->
+    <!-- 进项目时问一次机台号；以后要改直接点主界面左上角的大字，改动仍要过密码。
+         高度按内容自适应，免得填错时的红字被窗口裁掉 -->
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Orientation="Horizontal">
-            <Rectangle Width="3" Height="16" Fill="#409EFF"
-                       RadiusX="1.5" RadiusY="1.5" VerticalAlignment="Center" Margin="0,0,8,0" />
-            <TextBlock Text="机台号" Style="{StaticResource SectionTitle}" />
-            <TextBlock x:Name="ProfileHint" Style="{StaticResource SectionHint}" />
-        </StackPanel>
+        <!-- 机型提示由代码填进 Hint（跟着机台号走） -->
+        <controls:SectionHeader Grid.Row="0" x:Name="Header" Title="机台号" />
 
-        <TextBox Grid.Row="1" x:Name="MachineNoBox" Margin="0,14,0,0" Height="30"
+        <TextBox Grid.Row="1" x:Name="MachineNoBox" Margin="0,12,0,0" Height="32"
                  VerticalContentAlignment="Center" MaxLength="64"
                  ToolTip="4 个字母 + 3 位数字，例如 AIXP999；小写会自动转成大写" />
 
-        <!-- 只在"改机台号"时显示：过不了这关就不让改 -->
-        <StackPanel x:Name="PasswordRow" Grid.Row="2" Orientation="Horizontal" Margin="0,10,0,0"
-                    Visibility="Collapsed">
-            <TextBlock Text="密码" Foreground="#909399" VerticalAlignment="Center" />
-            <PasswordBox x:Name="PasswordInput" Width="200" Height="30" Margin="8,0,0,0"
-                         VerticalContentAlignment="Center" />
-        </StackPanel>
-
-        <StackPanel Grid.Row="3" Margin="0,10,0,0">
-            <TextBlock TextWrapping="Wrap" Foreground="#909399" FontSize="12"
+        <StackPanel Grid.Row="2" Margin="0,12,0,0">
+            <TextBlock TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource App.Text.Secondary}"
                        Text="按 4 个字母 + 3 位数字填写（例如 AIXP999）：前 4 位决定机型，会自动切到对应机型的配置；小写会自动转成大写。写触发记录时也会带上这个机台号。" />
-            <TextBlock x:Name="ErrorText" TextWrapping="Wrap" Foreground="#F56C6C" FontSize="12"
-                       Margin="0,6,0,0" Visibility="Collapsed" />
+            <TextBlock x:Name="ErrorText" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,0"
+                       Visibility="Collapsed" Foreground="{DynamicResource App.Danger}" />
         </StackPanel>
 
-        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button Content="保存" Width="84" IsDefault="True" Click="Save_Click"
                     Style="{StaticResource ButtonPrimary}" />
             <Button Content="取消" Width="84" Margin="8,0,0,0" IsCancel="True" />

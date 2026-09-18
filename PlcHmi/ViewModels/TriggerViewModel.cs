@@ -5,8 +5,8 @@ using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using PlcHmi.Models;
-using PlcHmi.Services;
+using PlcCore.Models;
+using PlcCore.Services;
 using Serilog;
 
 namespace PlcHmi.ViewModels;
