@@ -1,6 +1,8 @@
 # 构建产物
 bin/
 obj/
+# dotnet publish 的输出目录（默认 ./publish）
+publish/
 
 # 本地密钥（含数据库密码），不要提交
 .env
