@@ -1,5 +1,5 @@
-using PlcCore.Models;
-using PlcCore.Services;
+using HmiCore.Models;
+using HmiCore.Storage;
 
 namespace PlcTests;
 
@@ -124,5 +124,28 @@ public class StorageGroupValidatorTests
 
         Assert.Equal("组1", group.Name);
         Assert.Equal("PlcData1", group.TableName);
+    }
+
+    [Fact]
+    public void 三个附加列全关又没有点位_拦下()
+    {
+        var group = Group(mode: StorageMode.Wide);
+        group.UseIdentityColumn = false;
+        group.UseTimestampColumn = false;
+        group.UseMachineNoColumn = false;
+
+        // 宽表 + 点位列也没有 + 附加列也全关 → 一列都没有
+        Assert.Throws<InvalidOperationException>(() => StorageGroupValidator.Validate([group], []));
+    }
+
+    [Fact]
+    public void 只留机台号列也算有列_通过()
+    {
+        var group = Group(mode: StorageMode.Wide);
+        group.UseIdentityColumn = false;
+        group.UseTimestampColumn = false;
+        group.UseMachineNoColumn = true;
+
+        StorageGroupValidator.Validate([group], []);
     }
 }

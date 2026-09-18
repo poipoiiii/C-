@@ -1,0 +1,94 @@
+<UserControl x:Class="PlcHmi.Features.Plc.Views.TriggerView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:hc="https://handyorg.github.io/handycontrol"
+             xmlns:controls="clr-namespace:PlcHmi.Controls">
+
+    <!-- 「触发记录」页：上为触发规则表，下为最近的触发记录 -->
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <hc:Card Grid.Row="0" Padding="16,12" Margin="0,0,0,12"
+                 Background="{DynamicResource App.Surface}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <WrapPanel Grid.Row="0" VerticalAlignment="Center">
+                    <controls:SectionHeader Title="触发规则"
+                                            Hint="PLC 置信号 1 → 记一条记录 → 上位机写应答 1 → PLC 清信号 → 上位机写应答 0" />
+                    <TextBox hc:InfoElement.Title="轮询间隔(ms)" hc:InfoElement.TitlePlacement="Left"
+                             Width="160" Margin="12,0,0,0"
+                             Text="{Binding TriggerPollIntervalMs, UpdateSourceTrigger=PropertyChanged}" />
+                    <Button Content="新增规则" Command="{Binding AddTriggerRuleCommand}" Width="88"
+                            Margin="8,0,0,0" />
+                    <Button Content="删除选中" Width="88" Margin="8,0,0,0"
+                            Command="{Binding RemoveTriggerRuleCommand}"
+                            CommandParameter="{Binding SelectedItems, ElementName=TriggerGrid}" />
+                    <Button Content="保存配置" Command="{Binding SaveTriggerRulesCommand}" Width="88"
+                            Margin="8,0,0,0" />
+                </WrapPanel>
+
+                <DataGrid Grid.Row="1" x:Name="TriggerGrid" Height="180" Margin="0,12,0,0"
+                          ItemsSource="{Binding Triggers}" SelectedItem="{Binding SelectedTrigger}"
+                          Style="{StaticResource FlatGrid}">
+                    <DataGrid.Columns>
+                        <DataGridCheckBoxColumn Header="启用" Width="60"
+                                                Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" />
+                        <DataGridTextColumn Header="规则名" Width="140" Binding="{Binding Name}"
+                                            ElementStyle="{StaticResource CellText}" />
+                        <DataGridTextColumn Header="信号地址" Width="100" Binding="{Binding SignalAddress}"
+                                            ElementStyle="{StaticResource CellNumber}" />
+                        <DataGridTextColumn Header="应答地址" Width="100" Binding="{Binding AckAddress}"
+                                            ElementStyle="{StaticResource CellNumber}" />
+                        <DataGridTextColumn Header="信号(人读)" Width="110" IsReadOnly="True"
+                                            Binding="{Binding DisplaySignal}"
+                                            ElementStyle="{StaticResource CellMono}" />
+                        <DataGridTextColumn Header="应答(人读)" Width="110" IsReadOnly="True"
+                                            Binding="{Binding DisplayAck}"
+                                            ElementStyle="{StaticResource CellMono}" />
+                        <DataGridTextColumn Header="超时(ms)" Width="100" Binding="{Binding TimeoutMs}"
+                                            ElementStyle="{StaticResource CellNumber}" />
+                        <DataGridTextColumn Header="状态" Width="*" IsReadOnly="True"
+                                            Binding="{Binding StatusText}"
+                                            ElementStyle="{StaticResource CellText}" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </hc:Card>
+
+        <hc:Card Grid.Row="1" Padding="16,12" Background="{DynamicResource App.Surface}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                    <controls:SectionHeader Title="最近触发记录"
+                                            Hint="{Binding TriggerRecordsInfo}"
+                                            Accent="{DynamicResource App.Warning}" />
+                    <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12"
+                               Foreground="{DynamicResource App.Text.Secondary}"
+                               Text="只记「事件发生过」：时间戳 + 规则名 + 信号/应答地址。机台号、批次号、卷号这类业务字段由后续处理写入这张表即可。" />
+                </StackPanel>
+                <DataGrid Grid.Row="1" ItemsSource="{Binding TriggerView}" AutoGenerateColumns="True"
+                          IsReadOnly="True" Style="{StaticResource FlatGrid}"
+                          ColumnHeaderStyle="{StaticResource FlatHeader}" />
+            </Grid>
+        </hc:Card>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="4,12,0,0">
+            <TextBlock Text="{Binding TriggerStatus}"
+                       Foreground="{DynamicResource App.Text.Secondary}" />
+            <TextBlock Text="{Binding TriggerAlarm}" Margin="16,0,0,0"
+                       Foreground="{DynamicResource App.Danger}" />
+        </StackPanel>
+    </Grid>
+</UserControl>

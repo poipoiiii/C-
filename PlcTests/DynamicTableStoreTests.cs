@@ -1,5 +1,5 @@
-using PlcCore.Models;
-using PlcCore.Services;
+using HmiCore.Models;
+using HmiCore.Storage;
 
 namespace PlcTests;
 
@@ -141,5 +141,31 @@ public class DynamicTableStoreTests
             DynamicTableStore.MaxPointColumns(new TableShape(true, false)));
         Assert.Equal(DynamicTableStore.MaxPointColumnsInWideTable,
             DynamicTableStore.MaxPointColumns(TableShape.Default));
+    }
+
+    [Fact]
+    public void 勾了机台号列_建表语句里多一列可空机台号()
+    {
+        var shape = new TableShape(UseIdentityColumn: true, UseTimestampColumn: true, UseMachineNoColumn: true);
+
+        string script = DynamicTableStore.BuildCreateScript("表F", StorageMode.Long, [], shape);
+
+        // 可空：机台号没填时写 NULL，不阻断整行插入
+        Assert.Contains("[MachineNo] NVARCHAR(64) NULL", script);
+    }
+
+    [Fact]
+    public void 不勾机台号列_建表语句里没有机台号()
+    {
+        string script = DynamicTableStore.BuildCreateScript("表G", StorageMode.Long, []);
+
+        Assert.DoesNotContain("[MachineNo]", script);
+    }
+
+    [Fact]
+    public void 机台号列也占一个列位_宽表点位数上限跟着降()
+    {
+        Assert.Equal(DynamicTableStore.MaxColumnsPerTable - 3,
+            DynamicTableStore.MaxPointColumns(new TableShape(true, true, true)));
     }
 }

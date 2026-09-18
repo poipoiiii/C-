@@ -1,5 +1,5 @@
-using PlcCore.Models;
-using PlcCore.Services;
+using HmiCore.Models;
+using HmiCore.Config;
 
 namespace PlcTests;
 

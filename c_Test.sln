@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PlcCore", "PlcCore\PlcCore.csproj", "{C93E64A9-CF78-43F7-A595-D2D235F62317}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HmiCore", "HmiCore\HmiCore.csproj", "{C93E64A9-CF78-43F7-A595-D2D235F62317}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PlcHmi", "PlcHmi\PlcHmi.csproj", "{291B537E-0470-4708-83C1-3622607F4B5F}"
 EndProject

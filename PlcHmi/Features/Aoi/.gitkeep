@@ -1,0 +1,5 @@
+AOI 拍照/存图功能的落点：新功能按已有约定放这里 ——
+Views/ 放窗口与页签 UserControl，ViewModels/ 放对应的视图模型；
+相机通信、采集循环、图片落盘与保留策略放 HmiCore 侧（建议新开 HmiCore/Imaging/），
+运行期图片目录按用途加到 AppPaths（如 data/images/<机台号>/<日期>/）。
+本文件只是占位，让空目录能进版本库；加第一个文件后可以删掉它。

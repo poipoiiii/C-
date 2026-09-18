@@ -1,3 +1,71 @@
+2026-09-18  目录结构重构：PlcCore → HmiCore，PlcHmi 分成"外壳 + 功能模块"
+
+【动机】
+- 后续要往上位机上加别的功能（AOI 拍照存图等），原结构里没有"功能模块"这一层：
+  窗口全平铺在 PlcHmi 根目录、真正的服务挤在 PlcCore/Services 一个平层里，
+  "相机服务该放哪"没有答案，只能继续往平层与外壳视图模型里塞
+- PlcCore 这名字也不合适了：它装的其实是整台上位机的地基，不止 PLC
+
+【变更】
+- PlcCore → HmiCore：目录、csproj、RootNamespace / AssemblyName、全部命名空间、
+  c_Test.sln、PlcHmi / PlcTests 的项目引用
+- HmiCore 按关注点拆开（原 Services 与 Data 两个平层）：
+  Comm/         IModbusClient、ModbusService、ModbusScanService、SlaveProbeService、ConnectionController
+  Acquisition/  PlcAcquisitionService、AcquisitionController、TriggerWatchService、ShellStatusController
+  Storage/      SqlConnectionFactory、DynamicTableStore、TriggerLogStore、StorageGroupValidator
+  Config/       AppPaths、ConfigStore、MachineStore、ProfileResolver、MachineProfileController
+  Models/       不变；AppServices.cs 提到库根（命名空间 HmiCore）
+- PlcHmi 分成外壳与功能两块：
+  Views/               MainWindow（顶栏 + 页签容器）
+  Views/Dialogs/       机台号 / 密码 / PLC 配置 / 表记录历史四个弹窗
+  ViewModels/          MainViewModel（外壳）
+  Features/Plc/Views/        四个页签从 MainWindow.xaml 抽成 UserControl：
+                             DashboardView / ScanView / StorageView / TriggerView
+  Features/Plc/ViewModels/   页签视图模型跟着挪进来
+  Features/Aoi/               AOI 拍照存图的落点（仅占位）
+- MainWindow.xaml 774 行 → 341 行；CardColumns 依赖属性与曲线点击处理随看板页移到 DashboardView
+- README：目录树重写、项目表与文件链接同步、新增「分层约定」一节
+
+【验证】
+- dotnet build c_Test.sln：0 警告 0 错误
+- dotnet test：125 个用例全通过
+- README / start.md / C_study.md 里的文件链接全部指向存在的文件
+
+2026-09-18  业务层下沉到 PlcCore：模型与服务脱离 WPF，测试工程不再依赖界面
+
+【变更】
+- PlcHmi 的 Models 8 个（点位 / 机型 / 存储 / 触发规则等）与 Services 12 个（配置 / 动态表 /
+  采集 / 扫描 / 触发等）整体迁入 PlcCore，命名空间变为 PlcCore.Models / PlcCore.Services
+- PlcCore 新增 AcquisitionController、ConnectionController；补 CommunityToolkit.Mvvm
+  （领域模型是可观察对象）与 InternalsVisibleTo PlcTests
+- PlcHmi 只留界面：新增浅 / 深主题（Themes/PaletteLight|Dark、AppTheme）、SectionHeader 控件、
+  密码窗口与点位配置窗口
+- PlcTests：由引用 PlcHmi 改为引用 PlcCore，TargetFramework 从 net8.0-windows 回到 net8.0，
+  测纯逻辑不再需要 WPF 目标平台
+
+【验证】
+- dotnet build c_Test.sln：0 警告 0 错误
+- dotnet test：100 个用例全通过
+
+2026-09-18  新增 publish.bat：一键打包单文件 exe，并忽略 publish/ 输出
+
+【新增】
+- publish.bat：把 PlcHmi 打成单个自包含 exe，等价于
+  dotnet publish PlcHmi\PlcHmi.csproj -c Release -r win-x64 --self-contained true
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o ./publish
+  - 先切到脚本所在目录，双击也能跑；dotnet 不在 PATH 时回退到 %LOCALAPPDATA%\Microsoft\dotnet
+  - 打包前清空 publish/，避免上一次残留的 dll / pdb 混进安装包；只在失败时 pause
+
+【变更】
+- .gitignore：新增 publish/（构建产物，不入库）
+
+【说明】
+- 单文件只打包托管程序集与原生库；Templates\*.json 是 Content 内容文件，仍以文件夹形式与 exe 同层，
+  运行时 AppPaths.Templates 找的就是 exe 同目录，分发时两者必须一起拷
+
+【验证】
+- 实测：publish/ 下只有 PlcHmi.exe（约 208.6 MB）与 Templates/ 5 个 json
+
 2026-09-17  界面：机台号左上角大字，机型不给手选，改机台号要密码，顶部栏重排
 
 【变更】
@@ -9,6 +77,7 @@
   （MainViewModel 去掉 Profiles / SelectedProfile / _switchingProfile，状态栏不再重复机型）
 - 机台号小写自动补大写（aixp001 → AIXP001，MachineModels.Normalize）
 - 认不出机型时不切机型、只标黄提示，避免一个笔误就换掉配置
+- 更新日志由 update.log 更名为 update.md
 
 【新增】
 - 改机台号走 MachineNoWindow 的密码校验（requirePassword: true，密码 shjie12345）；

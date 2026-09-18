@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>HmiCore</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Modbus 通信 + 数据库连接：供 PlcHmi 通过 ProjectReference 复用这一份实现 -->
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+    <PackageReference Include="NModbus" Version="3.0.81" />
+    <!-- 领域模型（点位/存储组/触发规则）是可观察对象，供 PlcHmi 通过 ProjectReference 复用 -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 纯逻辑（拼 SQL 工具、换算公式）是 internal 的，放开给测试工程 -->
+    <InternalsVisibleTo Include="PlcTests" />
+  </ItemGroup>
+
+</Project>

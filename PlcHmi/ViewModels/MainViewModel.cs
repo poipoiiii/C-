@@ -1,10 +1,15 @@
-using System.IO;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using PlcCore.Services;
-using PlcCore.Models;
+using HmiCore;
+using HmiCore.Acquisition;
+using HmiCore.Comm;
+using HmiCore.Config;
+using HmiCore.Models;
+using HmiCore.Storage;
+using PlcHmi.Features.Plc.ViewModels;
 using PlcHmi.Services;
 using Serilog;
 
@@ -27,23 +32,17 @@ public partial class MainViewModel : ObservableObject
     private readonly Dispatcher _dispatcher = Application.Current.Dispatcher;
     private readonly AppServices _services;
 
-    /// <summary>本机档案（data/machine.json）：机台号 + 连接参数 + 当前机型。机型配置里不再放这些</summary>
-    private MachineProfile _machine;
-
-    /// <summary>机型模板缺失的告警（安装包不完整），启动时提示一次</summary>
-    private string? _templateWarning;
-
-    /// <summary>当前机型的配置；切换机型时整份换掉</summary>
-    private PlcConfig _config;
-
-    /// <summary>当前机型的配置读写（一个实例对应一个机型）</summary>
-    private ConfigStore _store;
+    /// <summary>机型/机台号控制器：机型配置的装载与切换、本机档案（data/machine.json）的读写与一次性迁移</summary>
+    private readonly MachineProfileController _profile;
 
     /// <summary>连接控制器：Modbus 链路的生命周期与连接参数（Ip/Port/SlaveId/IntervalMs）</summary>
     private readonly ConnectionController _connection;
 
     /// <summary>采集控制器：采集循环的生命周期与落库</summary>
     private readonly AcquisitionController _acquisition;
+
+    /// <summary>外壳状态控制器：会话状态（连接/采集/状态栏/错误/从站探测）与界面可用性规则的唯一来源</summary>
+    private readonly ShellStatusController _status;
 
     private TriggerWatchService? _triggerWatch;
 
@@ -55,51 +54,41 @@ public partial class MainViewModel : ObservableObject
     {
         _services = services;
 
-        // 机型：命令行 --config / --machine > 本机档案（机台号、上次选的机型）> 已有配置 > 已知机型第一个
-        _machine = MachineStore.Load();
+        // 机型：命令行 --config / --machine > 本机档案（机台号、上次选的机型）> 已有配置 > 已知机型第一个。
+        // 装载、切换与一次性迁移都在控制器里；这里只把它的结论搬到界面上
+        _profile = new MachineProfileController(Environment.GetCommandLineArgs());
 
         // 主题跟着本机档案走，先把配色装好；直接写字段，启动不该触发一次落盘
-        _isDarkTheme = string.Equals(_machine.Theme, "Dark", StringComparison.OrdinalIgnoreCase);
+        _isDarkTheme = string.Equals(_profile.Machine.Theme, "Dark", StringComparison.OrdinalIgnoreCase);
         AppTheme.Apply(_isDarkTheme);
 
-        string profile = ProfileResolver.Resolve(Environment.GetCommandLineArgs(), _machine);
-        _config = LoadConfig(profile, out _store);
-        MigrateMachineProfile();                     // 老配置里的机台号/连接参数搬进本机档案
+        _machineNo = _profile.MachineNo;              // 直接写字段：启动不该触发一次保存
 
-        // 迁移可能刚把机台号捡回来：再判一次机型（老档案叫「默认」，而机台号说明它其实是 AIXP）
-        string resolved = ProfileResolver.Resolve(Environment.GetCommandLineArgs(), _machine);
-        if (resolved != profile)
-        {
-            // 老档案是这台设备现场调好的真实配置：新机型的档案还没有时，直接拿它当初始内容，
-            // 别用模板把点位表盖掉（老档案本身留着不动，下拉里还能选回去）
-            if (!File.Exists(ConfigStore.PathFor(resolved)))
-            {
-                ConfigStore.CopyConfigFile(_store.Profile, resolved);
-            }
-
-            profile = resolved;
-            _config = LoadConfig(profile, out _store);
-        }
-
-        _machineNo = _machine.MachineNo;             // 直接写字段：启动不该触发一次保存
-
-        if (_machine.Profile != profile)
-        {
-            _machine.Profile = profile;
-            SaveMachineQuietly();
-        }
-
-        // 连接与采集各一个控制器：链路生命周期 / 采集循环与落库都收在 PlcCore 里。
+        // 连接与采集各一个控制器：链路生命周期 / 采集循环与落库都收在 HmiCore 里。
         // 控制器不碰界面，状态用事件报回来；面向操作工的文案与日志留在这里
-        _connection = new ConnectionController(services, _machine);
-        _acquisition = new AcquisitionController(services, () => Config);
+        _connection = new ConnectionController(services, _profile.Machine);
+        _acquisition = new AcquisitionController(services, () => Config, () => MachineNo);
+
+        // 状态控制器：会话状态与"哪些开关能点"的规则都在它那里，这里只是转发门面。
+        // 从站能否算配置成功要看输入框里的文本，所以把取值方式交给它
+        _status = new ShellStatusController(() => SlaveIdText);
+
         _connection.Connected += OnConnected;
         _connection.ConnectFailed += OnConnectFailed;
         _connection.Disconnected += OnDisconnected;
-        _connection.PersistFailed += OnConnectionPersistFailed;
+        _connection.PersistFailed += OnMachinePersistFailed;
+        _profile.PersistFailed += OnMachinePersistFailed;
         _acquisition.BatchCompleted += OnBatchCompleted;
         _acquisition.Failed += OnAcquisitionFailed;
         _acquisition.PersistFailed += OnPersistFailed;
+
+        // 状态控制器里的值变了就照原名转出去（界面绑的就是这些名字）；用户拨开关则报事件回来
+        _status.PropertyChanged += OnStatusPropertyChanged;
+        _status.ConnectionSwitchToggled += OnConnectionSwitchToggled;
+        _status.AcquisitionSwitchToggled += OnAcquisitionSwitchToggled;
+
+        // 连接参数唯一一份在连接控制器里：它那边改了值，这里照样发同名通知（界面才刷新）
+        _connection.PropertyChanged += OnStatusPropertyChanged;
 
         // 四个页签各一个视图模型；它们都拿外壳当共享上下文
         Storage = new StorageViewModel(this, services);
@@ -110,19 +99,33 @@ public partial class MainViewModel : ObservableObject
         Dashboard.Rebuild();
         ApplyConnectionConfig();
         RefreshProfileStatus();
-        if (_store.LoadWarning is { } warning)
+
+        // 控制器构造期落盘失败时事件还没有订阅者，靠 PersistError 把它带出来
+        if (_profile.PersistError is { } persistError)
+        {
+            StatusText = $"本机档案保存失败：{persistError.Message}";
+            Log.Error(persistError, "本机档案保存失败：{File}", AppPaths.MachineFile);
+        }
+
+        if (Store.LoadWarning is { } warning)
         {
             StatusText = warning;
             Log.Warning("配置告警：{Warning}", warning);
         }
-        else if (_templateWarning is { } templateWarning)
+        else if (_profile.TemplateMissing)
         {
-            StatusText = templateWarning;
-            Log.Warning("{Warning}", templateWarning);
+            StatusText = $"没找到机型模板 Templates/{_profile.Profile}.json（安装包可能不完整）：" +
+                         $"已按内置默认点位建了 {_profile.Profile}.json，请核对点位表";
+            Log.Warning("{Warning}", StatusText);
+        }
+
+        if (_profile.MigratedMachineProfile)
+        {
+            Log.Information("已把机台号/连接参数从机型配置搬到 {File}", AppPaths.MachineFile);
         }
 
         Log.Information("已启动：机台号 {MachineNo} · 机型 {Profile}（{ConfigFile}）",
-            NeedsMachineNo ? "未填" : MachineNo, _store.Profile, _store.FilePath);
+            NeedsMachineNo ? "未填" : MachineNo, Store.Profile, Store.FilePath);
 
         _ = Storage.RefreshTablesAsync();
         _ = Dashboard.RefreshRecordsAsync();
@@ -131,10 +134,10 @@ public partial class MainViewModel : ObservableObject
     // ---------------- 共享上下文（给四个页签用） ----------------
 
     /// <summary>当前机型的配置：点位表、存储组、触发规则都在里面</summary>
-    public PlcConfig Config => _config;
+    public PlcConfig Config => _profile.Config;
 
     /// <summary>当前机型的配置读写</summary>
-    public ConfigStore Store => _store;
+    public ConfigStore Store => _profile.Store;
 
     /// <summary>已连接的 Modbus 客户端；没连接时为 null</summary>
     public IModbusClient? Modbus => _connection.Modbus;
@@ -162,8 +165,8 @@ public partial class MainViewModel : ObservableObject
         // 曲线坐标轴的颜色取自主题，卡片得按新配色重建一遍
         Dashboard.Rebuild();
 
-        _machine.Theme = value ? "Dark" : "Light";
-        SaveMachineQuietly();
+        _profile.Machine.Theme = value ? "Dark" : "Light";
+        _profile.SaveMachine();
     }
 
     /// <summary>
@@ -177,13 +180,13 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _profileStatus = string.Empty;
 
     /// <summary>还没填机台号：界面据此决定要不要弹输入框</summary>
-    public bool NeedsMachineNo => string.IsNullOrWhiteSpace(MachineNo);
+    public bool NeedsMachineNo => _profile.NeedsMachineNo;
 
     /// <summary>
     /// 机台号还没填对（空着，或不是五个机型之一）：进项目时据此决定要不要弹输入框。
     /// 正常路径下界面是硬校验的，只有手工改过的 machine.json 才可能带着一个认不出的号码进来。
     /// </summary>
-    public bool NeedsMachineNoFix => !MachineModels.TryResolve(MachineNo, out _);
+    public bool NeedsMachineNoFix => _profile.NeedsMachineNoFix;
 
     /// <summary>左上角的大字：机台号</summary>
     public string MachineNoText => NeedsMachineNo ? "未填写" : MachineNo;
@@ -202,7 +205,7 @@ public partial class MainViewModel : ObservableObject
             }
 
             // 机台号是硬校验的（只能是五个机型之一），走到这里的只可能是手工改过的 machine.json
-            return MachineModels.TryResolve(MachineNo, out _) ? string.Empty : MachineModels.RequirementHint;
+            return _profile.ResolvedModel is null ? MachineModels.RequirementHint : string.Empty;
         }
     }
 
@@ -211,9 +214,9 @@ public partial class MainViewModel : ObservableObject
     {
         get
         {
-            string model = MachineModels.Find(_store.Profile) is { } found
+            string model = MachineModels.Find(Store.Profile) is { } found
                 ? $"{found.Name}（{found.Code}）"
-                : $"{_store.Profile}（自定义档案，不在已知机型表里）";
+                : $"{Store.Profile}（自定义档案，不在已知机型表里）";
 
             return HasMachineNoProblem ? $"{model} · {MachineNoHint}" : model;
         }
@@ -237,24 +240,21 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
-        _machine.MachineNo = machineNo;
+        // 存进本机档案并落盘；认不出机型时返回 null，维持当前机型继续跑
+        var model = _profile.UpdateMachineNo(machineNo);
         NotifyMachineHeader();
 
-        if (!MachineModels.TryResolve(machineNo, out var model))
+        if (model is null)
         {
-            SaveMachineQuietly();
             return;
         }
 
-        if (model.Code == _store.Profile)
+        if (model.Code == Store.Profile)
         {
-            SaveMachineQuietly();
             StatusText = $"机台号 {machineNo} → 机型 {model.Display}";
             return;
         }
 
-        _machine.Profile = model.Code;
-        SaveMachineQuietly();
         _ = SwitchProfileAsync(model.Code);
     }
 
@@ -270,82 +270,13 @@ public partial class MainViewModel : ObservableObject
     }
 
     /// <summary>状态栏那行只写配置文件路径（机型在左上角，不重复）</summary>
-    private void RefreshProfileStatus() => ProfileStatus = $"配置文件：{_store.FilePath}";
+    private void RefreshProfileStatus() => ProfileStatus = $"配置文件：{Store.FilePath}";
 
-    /// <summary>本机档案落盘；失败只在状态栏提示，不打断操作</summary>
-    private void SaveMachineQuietly()
+    /// <summary>本机档案落盘失败（连接参数 / 机台号 / 主题保存）：只在状态栏提示，不打断操作</summary>
+    private void OnMachinePersistFailed(Exception ex)
     {
-        try
-        {
-            MachineStore.Save(_machine);
-        }
-        catch (Exception ex)
-        {
-            StatusText = $"本机档案保存失败：{ex.Message}";
-            Log.Error(ex, "本机档案保存失败：{File}", AppPaths.MachineFile);
-        }
-    }
-
-    /// <summary>
-    /// 老配置把机台号与连接参数存在机型配置里（那时"一台机器一份配置"），现在搬到 data/machine.json：
-    /// 机器级的东西跟着设备走，机型配置才能做到同型号完全一致、整份复制给另一台机器用。
-    /// </summary>
-    private void MigrateMachineProfile()
-    {
-        bool machineChanged = false;
-
-        if (string.IsNullOrWhiteSpace(_machine.MachineNo) && !string.IsNullOrWhiteSpace(_config.LegacyMachineNo))
-        {
-            _machine.MachineNo = _config.LegacyMachineNo.Trim();
-            machineChanged = true;
-        }
-
-        if (_config.LegacyConnection is { } legacy)
-        {
-            _machine.Ip = legacy.Ip;
-            _machine.Port = legacy.Port;
-            _machine.SlaveId = legacy.SlaveId;
-            _machine.IntervalMs = legacy.IntervalMs;
-            machineChanged = true;
-        }
-
-        if (_config.LegacyMachineNo is null && _config.LegacyConnection is null)
-        {
-            if (machineChanged)
-            {
-                SaveMachineQuietly();
-            }
-
-            return;
-        }
-
-        // 老字段清掉：机器级信息以后只写在 machine.json 里
-        _config.LegacyMachineNo = null;
-        _config.LegacyConnection = null;
-        SaveConfigNow();
-        SaveMachineQuietly();
-
-        Log.Information("已把机台号/连接参数从机型配置搬到 {File}", AppPaths.MachineFile);
-    }
-
-    /// <summary>
-    /// 打开一个机型的配置：现场副本不在就从随包发布的机型模板复制一份
-    /// （第一次上这个型号、或者换到没见过的机型时就是这么建档案的）；
-    /// 模板也缺就按内置默认点位建，并记一条告警（安装包不完整）。
-    /// </summary>
-    private PlcConfig LoadConfig(string profile, out ConfigStore store)
-    {
-        store = ConfigStore.Open(profile);
-
-        if (!ConfigStore.EnsureConfigFile(profile))
-        {
-            _templateWarning = $"没找到机型模板 Templates/{profile}.json（安装包可能不完整）：" +
-                               $"已按内置默认点位建了 {profile}.json，请核对点位表";
-        }
-
-        var config = store.Load();
-        ReconcileDefaultColumnNames(config.Tags);
-        return config;
+        StatusText = $"本机档案保存失败：{ex.Message}";
+        Log.Error(ex, "本机档案保存失败：{File}", AppPaths.MachineFile);
     }
 
     /// <summary>
@@ -362,10 +293,8 @@ public partial class MainViewModel : ObservableObject
 
             Scan.CancelIfScanning();
 
-            // 先把新机型读出来，读失败就整个放弃、继续用原机型（_store 保持不动）
-            var nextConfig = LoadConfig(profile, out var nextStore);
-            _store = nextStore;
-            _config = nextConfig;
+            // 先把新机型读出来，读失败就整个放弃、继续用原机型（控制器里的当前机型保持不动）
+            _profile.SwitchTo(profile);
 
             // 四个页签各自按新配置重建（点位表、组表草稿、规则、卡片）
             Scan.OnConfigChanged();
@@ -376,10 +305,10 @@ public partial class MainViewModel : ObservableObject
             RefreshProfileStatus();
             NotifyMachineHeader();
 
-            StatusText = _store.LoadWarning ??
-                $"已切换到机型「{profile}」（{MachineModels.Find(profile)?.Name ?? "自定义"}）：" +
-                $"{_config.Tags.Count} 个点位 · {_config.Groups.Count} 个存储组";
-            Log.Information("已切换机型：{Profile}（{ConfigFile}）", profile, _store.FilePath);
+            StatusText = Store.LoadWarning ??
+                $"已切换到机型「{Store.Profile}」（{MachineModels.Find(Store.Profile)?.Name ?? "自定义"}）：" +
+                $"{Config.Tags.Count} 个点位 · {Config.Groups.Count} 个存储组";
+            Log.Information("已切换机型：{Profile}（{ConfigFile}）", Store.Profile, Store.FilePath);
         }
         catch (Exception ex)
         {
@@ -388,23 +317,8 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 兼容修复：早期版本改「名称」不会同步「宽表列名」，配置里会留下「名称=热封数量、列名=点位22」这种不一致。
-    /// 列名若仍是扫描加入时的默认占位名（点位N），就按名称纠正过来；手工改过的列名不动。
-    /// </summary>
-    private static void ReconcileDefaultColumnNames(IEnumerable<PlcTag> tags)
-    {
-        foreach (var tag in tags)
-        {
-            if (tag.ColumnName == $"点位{tag.Address}" && tag.Name != tag.ColumnName)
-            {
-                tag.ColumnName = tag.Name;
-            }
-        }
-    }
-
     /// <summary>把当前配置落盘；失败会抛，由调用方决定怎么提示</summary>
-    public void SaveConfigNow() => _store.Save(_config);
+    public void SaveConfigNow() => Store.Save(Config);
 
     /// <summary>点位变了：重建卡片、存盘，采集中则重启采集让新点位生效</summary>
     public void OnTagsChanged()
@@ -418,7 +332,7 @@ public partial class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusText = $"配置保存失败：{ex.Message}";
-            Log.Error(ex, "配置保存失败：{ConfigFile}", _store.FilePath);
+            Log.Error(ex, "配置保存失败：{ConfigFile}", Store.FilePath);
         }
 
         if (IsAcquiring)
@@ -429,73 +343,124 @@ public partial class MainViewModel : ObservableObject
 
     // ---------------- 连接与采集 ----------------
 
-    [ObservableProperty] private string _ip = "127.0.0.1";
-    [ObservableProperty] private int _port = 5020;
-    [ObservableProperty] private byte _slaveId = 1;
+    /// <summary>
+    /// PLC 地址：连接参数的唯一一份在 <see cref="ConnectionController"/> 里，这里只是转发给界面（绑定的仍是这个名字）。
+    /// set 写控制器，值真变了才发通知 —— 控制器被外部改也一样刷新。
+    /// </summary>
+    public string Ip
+    {
+        get => _connection.Ip;
+        set
+        {
+            if (!_connection.SetIp(value)) return;
+            NotifyPlcConfigSummary();
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>PLC 端口：转发到连接控制器（语义同 <see cref="Ip"/>）</summary>
+    public int Port
+    {
+        get => _connection.Port;
+        set
+        {
+            if (!_connection.SetPort(value)) return;
+            NotifyPlcConfigSummary();
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>采集周期：转发到连接控制器，并作用到正在运行的采集（语义同 <see cref="Ip"/>）</summary>
+    public int IntervalMs
+    {
+        get => _connection.IntervalMs;
+        set
+        {
+            if (!_connection.SetIntervalMs(value)) return;
+            NotifyPlcConfigSummary();
+            OnPropertyChanged();
+
+            // 改采集周期要作用到正在跑的采集循环
+            if (_acquisition.ApplyIntervalMs(value))
+            {
+                StatusText = $"采集中：{value} ms/次（采集周期已调整）";
+            }
+        }
+    }
+
+    /// <summary>
+    /// 从站号：转发到连接控制器；已连接时换从站要重连（ModbusService 的从站号是构造时固定的）。
+    /// </summary>
+    public byte SlaveId
+    {
+        get => _connection.SlaveId;
+        set
+        {
+            if (!_connection.SetSlaveId(value)) return;
+            NotifyPlcConfigSummary();
+            OnPropertyChanged();
+
+            if (!IsConnected)
+            {
+                return;
+            }
+
+            _ = SwitchSlaveAsync();
+        }
+    }
 
     /// <summary>顶栏「PLC 通信」分区的摘要；参数在配置弹窗里一次填完，这里只展示</summary>
     public string PlcConfigSummary => $"{Ip}:{Port} · 从站 {SlaveId} · {IntervalMs} ms/次";
 
     private void NotifyPlcConfigSummary() => OnPropertyChanged(nameof(PlcConfigSummary));
 
-    /// <summary>
-    /// 把界面上这几个可观察属性同步给连接控制器：参数由控制器持有（连接、探测、写本机档案都用它那一份），
-    /// 界面绑定的仍是这里的属性，改哪个都从这几处收口，两边不会走岔。
-    /// </summary>
-    private void SyncConnectionConfig()
+    /// <summary>控制器里的值变了就照原名转成外壳自己的通知：界面绑的是外壳，这样控制器侧被外部改也照样刷新</summary>
+    private void OnStatusPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        NotifyPlcConfigSummary();
-        _connection.Ip = Ip;
-        _connection.Port = Port;
-        _connection.SlaveId = SlaveId;
-        _connection.IntervalMs = IntervalMs;
+        if (!string.IsNullOrEmpty(e.PropertyName))
+        {
+            OnPropertyChanged(e.PropertyName);
+        }
     }
-
-    partial void OnIpChanged(string value) => SyncConnectionConfig();
-
-    partial void OnPortChanged(int value) => SyncConnectionConfig();
 
     /// <summary>
     /// 从站号输入框绑的是文本，不是 byte：直接绑 byte 的话边打字边转换，
     /// 中间态（比如只打了半个数字）会弹红色的“未能转换值”校验错误。
     /// </summary>
     [ObservableProperty] private string _slaveIdText = "1";
-    [ObservableProperty] private int _intervalMs = 1000;
     [ObservableProperty] private bool _persistEnabled = true;
 
-    [ObservableProperty]
-    private bool _isConnected;
+    /// <summary>链路已连上：状态与可用性规则都在 <see cref="ShellStatusController"/> 里，这里只转发</summary>
+    public bool IsConnected { get => _status.IsConnected; set => _status.IsConnected = value; }
 
-    [ObservableProperty]
-    private bool _isAcquiring;
+    /// <summary>正在采集（转发到状态控制器）</summary>
+    public bool IsAcquiring { get => _status.IsAcquiring; set => _status.IsAcquiring = value; }
 
-    [ObservableProperty] private string _statusText = "未连接";
-    [ObservableProperty] private string _commError = string.Empty;
-    [ObservableProperty] private string _persistError = string.Empty;
+    /// <summary>状态栏那行（转发；文案在外壳拼好再写进去）</summary>
+    public string StatusText { get => _status.StatusText; set => _status.StatusText = value; }
 
-    /// <summary>有通信/连接错误：顶栏状态那行据此标红提醒</summary>
-    public bool HasCommError => CommError.Length > 0;
+    /// <summary>通信/连接错误（转发）</summary>
+    public string CommError { get => _status.CommError; set => _status.CommError = value; }
 
-    partial void OnCommErrorChanged(string value) => OnPropertyChanged(nameof(HasCommError));
+    /// <summary>落库错误（转发）</summary>
+    public string PersistError { get => _status.PersistError; set => _status.PersistError = value; }
+
+    /// <summary>有通信/连接错误：顶栏状态那行据此标红提醒（由状态控制器算出，这里只转发）</summary>
+    public bool HasCommError => _status.HasCommError;
 
     /// <summary>
     /// 工具条上就两个开关，勾选状态即系统状态（勾上=已连接 / 采集中），按钮文字写的是"点下去会发生什么"（连接↔断开、开始采集↔停止采集）。
-    /// 用户点击 → 走下面的动作；状态回写（连接失败、切换机型等）→ 经 <see cref="_syncingSwitches"/> 只改显示，不再触发动作。
+    /// 用户点击 → 状态控制器报 <see cref="ShellStatusController.ConnectionSwitchToggled"/> 回来走下面的动作；
+    /// 状态回写（连接失败、切换机型等）→ 控制器内部只改显示，不再触发动作。
     /// </summary>
-    [ObservableProperty] private bool _connectionSwitch;
+    public bool ConnectionSwitch { get => _status.ConnectionSwitch; set => _status.ConnectionSwitch = value; }
 
-    [ObservableProperty] private bool _acquisitionSwitch;
+    /// <summary>采集开关（语义同 <see cref="ConnectionSwitch"/>）</summary>
+    public bool AcquisitionSwitch { get => _status.AcquisitionSwitch; set => _status.AcquisitionSwitch = value; }
 
-    /// <summary>正在由状态回写开关：挡住开关的变更处理器，免得连接/断开动作被反过来又触发一遍</summary>
-    private bool _syncingSwitches;
-
-    partial void OnConnectionSwitchChanged(bool value)
+    /// <summary>用户拨动连接开关（状态回写不经这里）：勾上就连接，取消就断开</summary>
+    private void OnConnectionSwitchToggled(bool value)
     {
-        if (_syncingSwitches)
-        {
-            return;
-        }
-
         if (value)
         {
             _connection.Connect();
@@ -506,13 +471,9 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    partial void OnAcquisitionSwitchChanged(bool value)
+    /// <summary>用户拨动采集开关（状态回写不经这里）：勾上就开始采集，取消就停止采集</summary>
+    private void OnAcquisitionSwitchToggled(bool value)
     {
-        if (_syncingSwitches)
-        {
-            return;
-        }
-
         if (value)
         {
             StartAcquisition();
@@ -520,38 +481,6 @@ public partial class MainViewModel : ObservableObject
         else
         {
             _ = StopAcquisitionAsync();
-        }
-    }
-
-    partial void OnIsConnectedChanged(bool value)
-    {
-        SyncSwitches();
-        NotifyControlAvailability();
-    }
-
-    partial void OnIsAcquiringChanged(bool value)
-    {
-        SyncSwitches();
-        NotifyControlAvailability();
-    }
-
-    /// <summary>把两个开关拨到与当前状态一致（动作没生效时靠它把开关还原）</summary>
-    private void SyncSwitches()
-    {
-        if (_syncingSwitches)
-        {
-            return;
-        }
-
-        _syncingSwitches = true;
-        try
-        {
-            ConnectionSwitch = IsConnected;
-            AcquisitionSwitch = IsAcquiring;
-        }
-        finally
-        {
-            _syncingSwitches = false;
         }
     }
 
@@ -573,27 +502,20 @@ public partial class MainViewModel : ObservableObject
         Log.Error(ex, "连接 PLC 失败：{Ip}:{Port}（从站 {SlaveId}）", Ip, Port, SlaveId);
 
         // 连不上时 IsConnected 没变过，不会触发状态回写，开关得手动拨回来
-        SyncSwitches();
+        _status.RestoreSwitches();
     }
 
-    /// <summary>连接参数落盘失败：只在状态栏提示，不打断连接</summary>
-    private void OnConnectionPersistFailed(Exception ex)
-    {
-        StatusText = $"本机档案保存失败：{ex.Message}";
-        Log.Error(ex, "本机档案保存失败：{File}", AppPaths.MachineFile);
-    }
-
-    /// <summary>把本机档案里的连接参数填回界面（启动时用；切机型不动它们）。同步给连接控制器由属性变更处理器负责</summary>
+    /// <summary>把本机档案里的连接参数填回界面（启动时用；切机型不动它们）。写进去即经连接控制器，界面由它那边的通知刷新</summary>
     private void ApplyConnectionConfig()
     {
-        Ip = _machine.Ip;
-        Port = _machine.Port;
-        IntervalMs = _machine.IntervalMs;
+        Ip = _profile.Machine.Ip;
+        Port = _profile.Machine.Port;
+        IntervalMs = _profile.Machine.IntervalMs;
 
-        // 先赋 SlaveId（未连接时它的变更处理器直接返回），再赋文本：
+        // 先赋 SlaveId（未连接时它只记值、不重连），再赋文本：
         // 反过来的话会经由 SelectSlave 弹一句“已切换到从站 N”
-        SlaveId = _machine.SlaveId;
-        SlaveIdText = _machine.SlaveId.ToString();
+        SlaveId = _profile.Machine.SlaveId;
+        SlaveIdText = _profile.Machine.SlaveId.ToString();
     }
 
     /// <summary>断开：停采集（连带触发监听）+ 断链路</summary>
@@ -615,46 +537,30 @@ public partial class MainViewModel : ObservableObject
 
     // ---------------- 从站探测与切换 ----------------
 
-    [ObservableProperty] private string _slaveProbeStatus = "未探测";
+    /// <summary>从站探测提示（转发；文案在外壳拼好再写进去）</summary>
+    public string SlaveProbeStatus { get => _status.SlaveProbeStatus; set => _status.SlaveProbeStatus = value; }
 
-    /// <summary>探测/从站号有问题：配置弹窗里那行提示据此标红</summary>
-    [ObservableProperty] private bool _slaveProbeFailed;
+    /// <summary>探测/从站号有问题：配置弹窗里那行提示据此标红（转发）</summary>
+    public bool SlaveProbeFailed { get => _status.SlaveProbeFailed; set => _status.SlaveProbeFailed = value; }
 
     /// <summary>
     /// 从站是否配置成功：从站号是 1~247 的整数，且最近一次探测没判失败。
     /// 没配好之前【连接】【开始采集】【写入数据库】一律点不动 —— 拿一个错的从站号去连、去写库，
     /// 轻则白折腾，重则把数据写到别的设备上去。恢复办法：点【配置…】重新探测到从站即可。
+    /// （规则在 <see cref="ShellStatusController"/> 里算，这里只转发）
     /// </summary>
-    public bool IsSlaveReady => !SlaveProbeFailed && IsValidSlaveId(SlaveIdText);
+    public bool IsSlaveReady => _status.IsSlaveReady;
 
-    /// <summary>开始采集的前提：链路已连上，且从站配置是好的</summary>
-    public bool CanAcquire => IsConnected && IsSlaveReady;
+    /// <summary>开始采集的前提：链路已连上，且从站配置是好的（规则在状态控制器里）</summary>
+    public bool CanAcquire => _status.CanAcquire;
 
     // 下面三个是"开关能不能点"。都带上"已经处于该状态就永远能点"（IsConnected / IsAcquiring）：
     // 否则从站配置在运行中判失败时，会把【断开】【停止采集】一起锁死，连停都停不下来。
-    public bool CanToggleConnection => IsConnected || IsSlaveReady;
+    public bool CanToggleConnection => _status.CanToggleConnection;
 
-    public bool CanToggleAcquisition => IsAcquiring || CanAcquire;
+    public bool CanToggleAcquisition => _status.CanToggleAcquisition;
 
-    public bool CanTogglePersist => IsAcquiring || IsSlaveReady;
-
-    /// <summary>从站配置 / 连接 / 采集中任一变化，三个开关的可用性都要重算</summary>
-    private void NotifyControlAvailability()
-    {
-        OnPropertyChanged(nameof(IsSlaveReady));
-        OnPropertyChanged(nameof(CanAcquire));
-        OnPropertyChanged(nameof(CanToggleConnection));
-        OnPropertyChanged(nameof(CanToggleAcquisition));
-        OnPropertyChanged(nameof(CanTogglePersist));
-    }
-
-    partial void OnSlaveProbeFailedChanged(bool value) => NotifyControlAvailability();
-
-    /// <summary>从站号是否合法（1~247 的整数）：解析规则只此一处，界面提示与能否操作都以它为准</summary>
-    private static bool IsValidSlaveId(string? text, out byte unitId) =>
-        byte.TryParse(text?.Trim(), out unitId) && unitId is >= 1 and <= 247;
-
-    private static bool IsValidSlaveId(string? text) => IsValidSlaveId(text, out _);
+    public bool CanTogglePersist => _status.CanTogglePersist;
 
     /// <summary>
     /// 配置弹窗点了【确定】：用户已经确认这组连接参数，先前探测失败的标记清掉。
@@ -728,10 +634,10 @@ public partial class MainViewModel : ObservableObject
     /// <summary>从站号文本变化：能解析成合法从站号才生效，否则只在提示里标红，不改当前从站</summary>
     partial void OnSlaveIdTextChanged(string value)
     {
-        NotifyControlAvailability();   // 号码一变，能不能操作就得重新判一次
+        _status.NotifySlaveIdTextChanged();   // 号码一变，能不能操作就得重新判一次
 
         var text = value?.Trim() ?? string.Empty;
-        if (!IsValidSlaveId(text, out byte unitId))
+        if (!ShellStatusController.IsValidSlaveId(text, out byte unitId))
         {
             if (text.Length > 0)
             {
@@ -746,18 +652,6 @@ public partial class MainViewModel : ObservableObject
         {
             SelectSlave(unitId);
         }
-    }
-
-    partial void OnSlaveIdChanged(byte value)
-    {
-        SyncConnectionConfig();
-
-        if (!IsConnected)
-        {
-            return;
-        }
-
-        _ = SwitchSlaveAsync();
     }
 
     /// <summary>从站号变了：重连并按需恢复采集（ModbusService 的从站号是构造时固定的）</summary>
@@ -781,14 +675,14 @@ public partial class MainViewModel : ObservableObject
     private void StartAcquisition()
     {
         var modbus = _connection.Modbus;
-        if (modbus is null || IsAcquiring || _config.Tags.Count == 0)
+        if (modbus is null || IsAcquiring || Config.Tags.Count == 0)
         {
-            if (_config.Tags.Count == 0)
+            if (Config.Tags.Count == 0)
             {
                 Scan.TagStatus = "点位表是空的，先去「采集点位」页扫描或添加点位";
             }
 
-            SyncSwitches();   // 没真正开起来，把开关拨回去
+            _status.RestoreSwitches();   // 没真正开起来，把开关拨回去
             return;
         }
 
@@ -796,10 +690,10 @@ public partial class MainViewModel : ObservableObject
 
         IsAcquiring = true;
         StatusText = PersistEnabled
-            ? $"采集中：{IntervalMs} ms/次 · 从站 {SlaveId} · {_config.Tags.Count} 个点位 → {_config.Groups.Count} 张表"
-            : $"采集中：{IntervalMs} ms/次 · 从站 {SlaveId} · {_config.Tags.Count} 个点位，未落库";
+            ? $"采集中：{IntervalMs} ms/次 · 从站 {SlaveId} · {Config.Tags.Count} 个点位 → {Config.Groups.Count} 张表"
+            : $"采集中：{IntervalMs} ms/次 · 从站 {SlaveId} · {Config.Tags.Count} 个点位，未落库";
         Log.Information("开始采集：{IntervalMs} ms/次 · 从站 {SlaveId} · {TagCount} 个点位 · 落库 {PersistEnabled}",
-            IntervalMs, SlaveId, _config.Tags.Count, PersistEnabled);
+            IntervalMs, SlaveId, Config.Tags.Count, PersistEnabled);
 
         // 采集与触发监听是一套生命周期：开采集就把监听一起起来
         StartTriggerWatch();
@@ -888,16 +782,6 @@ public partial class MainViewModel : ObservableObject
         Log.Error("落库失败：{Message}", message);
     }
 
-    partial void OnIntervalMsChanged(int value)
-    {
-        SyncConnectionConfig();
-
-        if (_acquisition.ApplyIntervalMs(value))
-        {
-            StatusText = $"采集中：{value} ms/次（采集周期已调整）";
-        }
-    }
-
     partial void OnPersistEnabledChanged(bool value) => _acquisition.ApplyPersistEnabled(value);
 
     private async Task RestartAcquisitionAsync()
@@ -911,13 +795,13 @@ public partial class MainViewModel : ObservableObject
     private void StartTriggerWatch()
     {
         var modbus = _connection.Modbus;
-        if (modbus is null || _triggerWatch is not null || !_config.Triggers.Any(t => t.Enabled))
+        if (modbus is null || _triggerWatch is not null || !Config.Triggers.Any(t => t.Enabled))
         {
             Trigger.OnWatchSkipped();
             return;
         }
 
-        _triggerWatch = new TriggerWatchService(modbus, [.. _config.Triggers])
+        _triggerWatch = new TriggerWatchService(modbus, [.. Config.Triggers])
         {
             PollIntervalMs = Trigger.TriggerPollIntervalMs
         };

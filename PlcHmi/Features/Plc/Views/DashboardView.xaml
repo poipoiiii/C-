@@ -1,0 +1,143 @@
+<UserControl x:Class="PlcHmi.Features.Plc.Views.DashboardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:hc="https://handyorg.github.io/handycontrol"
+             xmlns:lvc="clr-namespace:LiveChartsCore.SkiaSharpView.WPF;assembly=LiveChartsCore.SkiaSharpView.WPF">
+
+    <!-- 「实时看板」页：卡片按存储组分段，点曲线弹这张表的历史记录。
+         一行放几张由卡片区实际宽度算出来（见本控件代码里的 CardColumns） -->
+
+    <ScrollViewer x:Name="CardScroll" Margin="12" VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled" Padding="0,0,8,0"
+                  SizeChanged="CardScroll_SizeChanged">
+        <StackPanel>
+            <ItemsControl ItemsSource="{Binding Groups}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <!-- 一个存储组一段：点组头可收起 / 展开，收起状态存在视图模型里 -->
+                        <Expander IsExpanded="{Binding IsExpanded, Mode=TwoWay}" Margin="0,0,0,4">
+                            <Expander.Header>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="Bold"
+                                               VerticalAlignment="Center"
+                                               Foreground="{DynamicResource App.Text.Primary}" />
+                                    <TextBlock Text="{Binding HeaderText}" Style="{StaticResource SectionHint}" />
+                                </StackPanel>
+                            </Expander.Header>
+
+                            <ItemsControl ItemsSource="{Binding Tags}" Margin="0,8,0,0">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <!-- 列数按卡片区实际宽度算出来，均分宽度才能真正排满整行 -->
+                                        <UniformGrid Columns="{Binding CardColumns,
+                                                    RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <hc:Card Height="292" Margin="0,0,12,12" Padding="16"
+                                                 BorderThickness="1"
+                                                 Background="{DynamicResource App.Surface}"
+                                                 BorderBrush="{DynamicResource App.Border}">
+                                            <Grid ClipToBounds="True">
+                                                <Grid.Style>
+                                                    <Style TargetType="Grid">
+                                                        <!-- 离线卡片整体淡化，一眼看出哪台没数据 -->
+                                                        <Setter Property="Opacity" Value="0.45" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsOnline}" Value="True">
+                                                                <Setter Property="Opacity" Value="1" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Grid.Style>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="*" />
+                                                </Grid.RowDefinitions>
+
+                                                <Grid Grid.Row="0">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <Ellipse Width="9" Height="9" VerticalAlignment="Center"
+                                                                 Margin="0,0,8,0">
+                                                            <Ellipse.Style>
+                                                                <Style TargetType="Ellipse">
+                                                                    <Setter Property="Fill"
+                                                                            Value="{DynamicResource App.Off}" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsOnline}" Value="True">
+                                                                            <Setter Property="Fill"
+                                                                                    Value="{DynamicResource App.Success}" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Ellipse.Style>
+                                                        </Ellipse>
+                                                        <TextBlock Text="{Binding Tag.Name}" FontSize="15" FontWeight="Bold"
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource App.Text.Primary}" />
+                                                    </StackPanel>
+                                                    <TextBlock Text="{Binding Tag.DisplayAddress}" HorizontalAlignment="Right"
+                                                               VerticalAlignment="Center" FontSize="12" FontFamily="Consolas"
+                                                               Foreground="{DynamicResource App.Text.Faint}" />
+                                                </Grid>
+
+                                                <Grid Grid.Row="1" Margin="0,10,0,6">
+                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+                                                        <TextBlock Text="{Binding ValueText}" FontSize="34" FontWeight="Bold"
+                                                                   FontFamily="Consolas" Foreground="{Binding AccentBrush}" />
+                                                        <TextBlock Text="{Binding Tag.Unit}" FontSize="14" Margin="6,0,0,6"
+                                                                   VerticalAlignment="Bottom"
+                                                                   Foreground="{DynamicResource App.Text.Secondary}" />
+                                                    </StackPanel>
+                                                    <StackPanel HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                                Margin="0,0,0,4">
+                                                        <TextBlock HorizontalAlignment="Right" FontSize="12">
+                                                            <Run Text="原始值 "
+                                                                 Foreground="{DynamicResource App.Text.Faint}" />
+                                                            <Run Text="{Binding RawText}" FontWeight="SemiBold"
+                                                                 Foreground="{DynamicResource App.Text.Regular}" />
+                                                        </TextBlock>
+                                                        <TextBlock Text="{Binding UpdatedAtText}" HorizontalAlignment="Right"
+                                                                   FontSize="11"
+                                                                   Foreground="{DynamicResource App.Text.Faint}" />
+                                                        <TextBlock Text="{Binding FailureText}" HorizontalAlignment="Right"
+                                                                   FontSize="11" MaxWidth="260"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   Foreground="{DynamicResource App.Danger}">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <!-- 正常时没有失败原因，整行收起 -->
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding FailureText}" Value="">
+                                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+                                                    </StackPanel>
+                                                </Grid>
+
+                                                <!-- 点曲线弹出这张表的历史记录；用 Preview 事件，免得被图表自己的鼠标处理吃掉 -->
+                                                <lvc:CartesianChart Grid.Row="2"
+                                                                    ToolTip="点击查看这张表的历史记录"
+                                                                    PreviewMouseLeftButtonUp="Chart_Click"
+                                                                    Series="{Binding Series}"
+                                                                    XAxes="{Binding XAxes}"
+                                                                    YAxes="{Binding YAxes}"
+                                                                    LegendPosition="Hidden"
+                                                                    TooltipPosition="Hidden" />
+                                            </Grid>
+                                        </hc:Card>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Expander>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

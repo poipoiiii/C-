@@ -8,6 +8,10 @@ namespace PlcSimulator;
 /// 本地仿真 PLC：用 NModbus 在同一个端口上挂多个从站，模拟“一个网关后面接多台 PLC”。
 /// 每台设备开放各自的寄存器范围，越界地址返回异常码 02（非法数据地址），
 /// 客户端用「IP + 端口 + 从站号」就能读到对应设备的全部数据。
+///
+/// 从站 1~5 = 五种机台（AIXP / AITN / AIBM / AIIR / AIPC），一个从站只放一种机型的数据，
+/// 各开放 40001~40100：每 5 个寄存器一个区段（= 一张表），共 20 张表，每秒各自随机刷新。
+/// 最后一个从站是握手测试设备（信号位 → 应答位），用来验证触发记录，不参与机台数据。
 /// </summary>
 internal static class Program
 {
@@ -58,7 +62,12 @@ internal static class Program
         {
             Console.WriteLine($"  从站 {profile.UnitId} | {profile.Name} | 开放地址 0~{profile.RegisterCount - 1}" +
                 $"（40001~4{profile.RegisterCount:D4}）");
-            Console.WriteLine($"           {profile.Map}");
+
+            // Map 允许写成多行（机台的点位说明会比较长），逐行缩进打印
+            foreach (var line in profile.Map.Split('\n'))
+            {
+                Console.WriteLine($"           {line}");
+            }
         }
 
         foreach (var handshake in handshakes)
@@ -148,17 +157,24 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// 每秒一行摘要：机台从站打印第一个和最后一个区段（各 5 个值），
+    /// 100 个寄存器全打会把控制台刷满，取首尾两段就够看出「每个区段各自在随机」。
+    /// </summary>
     private static string FormatLine(DeviceProfile profile, ushort[] values)
     {
-        var text = profile.UnitId switch
+        if (profile.Handshake is not null)
         {
-            1 => $"1#挤出机 温度={values[0]} 压力={values[1]} 产量={values[2]} 设定={values[3]} 状态={values[4]}",
-            2 => $"2#注塑机 料筒={values[0]} 注射={values[1]} 锁模={values[2]} 良品={values[5]} 不良={values[6]}",
-            3 => $"3#公用 水温={values[0]} 流量={values[1]} 电耗={values[2]} 报警={values[3]}",
-            4 => $"4#握手 数据0={values[0]} 数据1={values[1]}（信号/应答见上面的握手日志）",
-            _ => $"从站 {profile.UnitId}"
-        };
+            return $"{profile.Name} 数据0={values[0]} 数据1={values[1]}（信号/应答见上面的握手日志）";
+        }
 
-        return text;
+        int segmentCount = values.Length / MachineSpec.RegistersPerSegment;
+        int lastStart = values.Length - MachineSpec.RegistersPerSegment;
+
+        return $"{profile.Name} 区段01=[{JoinSegment(values, 0)}] … " +
+            $"区段{segmentCount:D2}=[{JoinSegment(values, lastStart)}]";
     }
+
+    private static string JoinSegment(ushort[] values, int start) =>
+        string.Join(" ", Enumerable.Range(start, MachineSpec.RegistersPerSegment).Select(i => values[i]));
 }

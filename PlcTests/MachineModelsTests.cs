@@ -1,4 +1,4 @@
-using PlcCore.Models;
+using HmiCore.Models;
 
 namespace PlcTests;
 

@@ -18,8 +18,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 只测纯逻辑：动态表拼 SQL、机型名校验、点位模型、换算。这些都在 PlcCore 里，无需引用 WPF 工程 -->
-    <ProjectReference Include="..\PlcCore\PlcCore.csproj" />
+    <!-- 只测纯逻辑：动态表拼 SQL、机型名校验、点位模型、换算。这些都在 HmiCore 里，无需引用 WPF 工程 -->
+    <ProjectReference Include="..\HmiCore\HmiCore.csproj" />
   </ItemGroup>
 
   <ItemGroup>

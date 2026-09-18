@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
-using PlcCore.Models;
-using PlcCore.Services;
+using HmiCore.Models;
+using HmiCore.Acquisition;
+using HmiCore.Comm;
 
 namespace PlcTests;
 

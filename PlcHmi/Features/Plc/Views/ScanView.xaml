@@ -1,0 +1,150 @@
+<UserControl x:Class="PlcHmi.Features.Plc.Views.ScanView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:hc="https://handyorg.github.io/handycontrol"
+             xmlns:controls="clr-namespace:PlcHmi.Controls">
+
+    <!-- 「采集点位」页：左扫描结果、右点位表，中间分隔条可拖动调宽 -->
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <!-- 扫描结果与采集点位表左右并列：默认 40% / 60%，中间的分隔条可拖动调宽 -->
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="4*" MinWidth="320" />
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="6*" MinWidth="320" />
+        </Grid.ColumnDefinitions>
+
+        <hc:Card Grid.Row="0" Grid.ColumnSpan="3" Padding="16,12" Margin="0,0,0,12"
+                 Background="{DynamicResource App.Surface}">
+            <WrapPanel VerticalAlignment="Center">
+                <controls:SectionHeader Title="扫描寄存器" Margin="0,0,12,0" />
+                <TextBox hc:InfoElement.Title="起始地址" hc:InfoElement.TitlePlacement="Left" Width="160"
+                         Text="{Binding ScanStart, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBox hc:InfoElement.Title="结束地址" hc:InfoElement.TitlePlacement="Left" Width="160"
+                         Margin="8,0,0,0" Text="{Binding ScanEnd, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBox hc:InfoElement.Title="每段个数" hc:InfoElement.TitlePlacement="Left" Width="130"
+                         Margin="8,0,0,0" Text="{Binding ScanBatchSize, UpdateSourceTrigger=PropertyChanged}" />
+                <Rectangle Style="{StaticResource Divider}" />
+                <Button Content="开始扫描" Command="{Binding ScanCommand}" Style="{StaticResource ButtonPrimary}"
+                        Width="88" />
+                <Button Content="取消扫描" Command="{Binding CancelScanCommand}" Width="88" Margin="8,0,0,0" />
+                <TextBlock Text="{Binding ScanStatus}" Style="{StaticResource SectionHint}" />
+            </WrapPanel>
+        </hc:Card>
+
+        <hc:Card Grid.Row="1" Grid.Column="0" Padding="16,12" Margin="0,0,4,12"
+                 Background="{DynamicResource App.Surface}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0" Margin="0,0,0,12">
+                    <controls:SectionHeader Title="扫描结果"
+                                            Hint="地址可填 40001 这种人读地址；" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="全选可读" Command="{Binding SelectAllReadableCommand}" Width="88" />
+                        <Button Content="加入点位表" Command="{Binding AddSelectedScanResultsCommand}"
+                                Style="{StaticResource ButtonSuccess}" Width="100" Margin="8,0,0,0" />
+                    </StackPanel>
+                </Grid>
+                <DataGrid Grid.Row="1" ItemsSource="{Binding ScanResults}" Style="{StaticResource FlatGrid}">
+                    <DataGrid.Columns>
+                        <DataGridCheckBoxColumn Header="选用" Width="60"
+                                                Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" />
+                        <DataGridTextColumn Header="人读地址" Width="130" IsReadOnly="True"
+                                            Binding="{Binding DisplayAddress}"
+                                            ElementStyle="{StaticResource CellMono}" />
+                        <DataGridTextColumn Header="协议地址" Width="110" IsReadOnly="True"
+                                            Binding="{Binding Address}"
+                                            ElementStyle="{StaticResource CellNumber}" />
+                        <DataGridTextColumn Header="原始值" Width="120" IsReadOnly="True"
+                                            Binding="{Binding RawText}"
+                                            ElementStyle="{StaticResource CellNumber}" />
+                        <DataGridTemplateColumn Header="状态" Width="*" IsReadOnly="True">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Status}">
+                                        <TextBlock.Style>
+                                            <!-- 读异常标红，可读标绿 -->
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource CellText}">
+                                                <Setter Property="Foreground"
+                                                        Value="{DynamicResource App.Danger}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsReadable}" Value="True">
+                                                        <Setter Property="Foreground"
+                                                                Value="{DynamicResource App.Success.Text}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </hc:Card>
+
+        <!-- 拖动分隔条调整左右宽度（4* / 6* 只是初始比例） -->
+        <GridSplitter Grid.Row="1" Grid.Column="1" Width="8" Margin="0,0,4,12"
+                      HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                      ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"
+                      Background="{DynamicResource App.Border}" />
+
+        <hc:Card Grid.Row="1" Grid.Column="2" Padding="16,12" Margin="4,0,0,12"
+                 Background="{DynamicResource App.Surface}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0" Margin="0,0,0,12">
+                    <controls:SectionHeader Title="采集点位表"
+                                            Hint="双击可编辑；宽表列名默认跟随名称自动同步，单独改过之后就不再跟着变"
+                                            Accent="{DynamicResource App.Success}" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="删除选中" Width="88"
+                                Command="{Binding RemoveSelectedTagCommand}"
+                                CommandParameter="{Binding SelectedItems, ElementName=TagGrid}" />
+                        <Button Content="保存配置" Command="{Binding SaveConfigCommand}" Width="88"
+                                Margin="8,0,0,0" />
+                    </StackPanel>
+                </Grid>
+                <DataGrid x:Name="TagGrid" Grid.Row="1" ItemsSource="{Binding TagConfigs}"
+                          Style="{StaticResource FlatGrid}">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="人读地址" Width="130" IsReadOnly="True"
+                                            Binding="{Binding DisplayAddress}"
+                                            ElementStyle="{StaticResource CellMono}" />
+                        <DataGridTextColumn Header="协议地址" Width="110" Binding="{Binding Address}"
+                                            ElementStyle="{StaticResource CellNumber}" />
+                        <DataGridTextColumn Header="名称" Width="140" Binding="{Binding Name}"
+                                            ElementStyle="{StaticResource CellText}" />
+                        <DataGridTextColumn Header="单位" Width="90" Binding="{Binding Unit}"
+                                            ElementStyle="{StaticResource CellText}" />
+                        <DataGridTextColumn Header="Scale" Width="100" Binding="{Binding Scale}"
+                                            ElementStyle="{StaticResource CellNumber}" />
+                        <DataGridTextColumn Header="Offset" Width="100" Binding="{Binding Offset}"
+                                            ElementStyle="{StaticResource CellNumber}" />
+                        <DataGridTextColumn Header="宽表列名" Width="*" Binding="{Binding ColumnName}"
+                                            ElementStyle="{StaticResource CellText}" />
+                        <!-- 存储组：由地址落在哪个区段决定，这里只展示；要改就改「存储映射」页的区段 -->
+                        <DataGridTextColumn Header="存储组" Width="120" IsReadOnly="True"
+                                            Binding="{Binding GroupText}"
+                                            ElementStyle="{StaticResource CellText}" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </hc:Card>
+
+        <TextBlock Grid.Row="2" Grid.ColumnSpan="3" Text="{Binding TagStatus}" Margin="4,0,0,0"
+                   Foreground="{DynamicResource App.Text.Secondary}" />
+    </Grid>
+</UserControl>
