@@ -12,6 +12,9 @@ namespace PlcSimulator;
 /// 从站 1~5 = 五种机台（AIXP / AITN / AIBM / AIIR / AIPC），一个从站只放一种机型的数据，
 /// 各开放 40001~40100：每 5 个寄存器一个区段（= 一张表），共 20 张表，每秒各自随机刷新。
 /// 最后一个从站是握手测试设备（信号位 → 应答位），用来验证触发记录，不参与机台数据。
+///
+/// 启动参数见 <see cref="Usage"/>：<c>--slave 1</c> 只起指定从站（其余从站不存在，日志也少），
+/// <c>--verbose</c> 打印主站的每次读请求。
 /// </summary>
 internal static class Program
 {
@@ -21,12 +24,48 @@ internal static class Program
     /// <summary>每个从站开放的线圈数量</summary>
     private const int CoilCount = 20;
 
-    private static async Task Main()
+    private const string Usage =
+        """
+        用法：dotnet run --project PlcSimulator\PlcSimulator.csproj [-- --slave <从站号>[,<从站号>]] [--verbose]
+
+          （不带 --slave）  启动全部从站：1~5 = 五种机台（各 40001~40100），6 = 握手测试
+          --slave 1         只启动从站 1，其余从站在这个端口上不存在（探测 / 扫描结果更干净）
+          --slave 1,6       一次起多个，逗号分隔
+          --verbose         打印主站的每次读请求（默认关闭 —— 上位机轮询时一秒能打十几行）
+          --help            显示这段说明
+        """;
+
+    /// <summary>命令行选项：只起哪些从站（null = 全部）、要不要打印每次读请求</summary>
+    private sealed record Options(IReadOnlySet<byte>? Slaves, bool Verbose)
     {
+        public bool Includes(byte unitId) => Slaves is null || Slaves.Contains(unitId);
+    }
+
+    private static async Task Main(string[] args)
+    {
+        if (args.Any(a => a is "--help" or "-h"))
+        {
+            Console.WriteLine(Usage);
+            return;
+        }
+
+        var all = DeviceProfile.CreateAll();
+
+        var options = ParseArgs(args, all.Select(p => p.UnitId).ToArray(), out string? error);
+        if (options is null)
+        {
+            Console.WriteLine(error);
+            Console.WriteLine();
+            Console.WriteLine(Usage);
+            Environment.ExitCode = 1;   // 参数写错时给个非零退出码，脚本里能看出来
+            return;
+        }
+
+        var profiles = all.Where(p => options.Includes(p.UnitId)).ToList();
+
         var listener = new TcpListener(IPAddress.Loopback, Port);
         listener.Start();
 
-        var profiles = DeviceProfile.CreateAll();
         var stores = new Dictionary<byte, LimitedSlaveDataStore>();
         var handshakes = new List<HandshakeDevice>();
 
@@ -38,10 +77,10 @@ internal static class Program
             var store = new LimitedSlaveDataStore(profile.RegisterCount, CoilCount);
             byte unitId = profile.UnitId;
 
-            // 打印主站的每次读请求，带上从站号，便于确认采的是哪台设备。
-            // 握手设备不打印：上位机以 100ms 的节奏轮询信号位，打出来会把控制台刷满，
-            // 它的时序改由 HandshakeDevice 自己记录。
-            if (profile.Handshake is null)
+            // 「每次读请求」的日志默认关闭：上位机按区段轮询时一秒能打十几行，把有用的信息淹没，
+            // 需要确认采的是哪台设备时再加 --verbose。握手设备始终不打 ——
+            // 上位机以 100ms 的节奏轮询信号位，它的时序改由 HandshakeDevice 自己记录。
+            if (options.Verbose && profile.Handshake is null)
             {
                 store.HoldingRegisters.Read += (start, count) =>
                     Console.WriteLine($"  <- 从站 {unitId}（{profile.Name}）读保持寄存器：起始={start} 数量={count}");
@@ -56,7 +95,8 @@ internal static class Program
             }
         }
 
-        Console.WriteLine($"仿真 PLC 已启动：{IPAddress.Loopback}:{Port}，同一端口挂 {profiles.Count} 个从站");
+        Console.WriteLine($"仿真 PLC 已启动：{IPAddress.Loopback}:{Port}，同一端口挂 {profiles.Count} 个从站" +
+            (options.Slaves is null ? "" : "（--slave 指定的）"));
         Console.WriteLine("客户端用「IP + 端口 + 从站号」定位设备，越界地址回异常码 02；单次读保持寄存器上限 125 个\n");
         foreach (var profile in profiles)
         {
@@ -98,6 +138,55 @@ internal static class Program
 
         await simTask;
         Console.WriteLine("仿真 PLC 已停止。");
+    }
+
+    /// <summary>
+    /// 解析命令行：<c>--slave</c> 只起指定从站、<c>--verbose</c> 打开每次读请求的日志。
+    /// 解析失败返回 null（由调用方打印错误与用法），错误信息放在 <paramref name="error"/> 里。
+    /// </summary>
+    private static Options? ParseArgs(string[] args, IReadOnlyList<byte> availableUnitIds, out string? error)
+    {
+        var slaves = new HashSet<byte>();
+        bool verbose = false;
+        error = null;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--verbose" or "-v":
+                    verbose = true;
+                    break;
+
+                case "--slave" or "--unit" or "-s":
+                    if (i + 1 >= args.Length)
+                    {
+                        error = "参数 --slave 后面要跟从站号，例如 --slave 1 或 --slave 1,6";
+                        return null;
+                    }
+
+                    // 允许 --slave 1,6 这种一次起多个
+                    foreach (string part in args[++i].Split(',',
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    {
+                        if (!byte.TryParse(part, out byte unitId) || !availableUnitIds.Contains(unitId))
+                        {
+                            error = $"从站号「{part}」无效：这台仿真器只有 {string.Join(" / ", availableUnitIds)}";
+                            return null;
+                        }
+
+                        slaves.Add(unitId);
+                    }
+
+                    break;
+
+                default:
+                    error = $"看不懂的参数：{args[i]}";
+                    return null;
+            }
+        }
+
+        return new Options(slaves.Count == 0 ? null : slaves, verbose);
     }
 
     /// <summary>

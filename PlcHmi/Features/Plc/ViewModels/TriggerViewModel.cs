@@ -147,7 +147,7 @@ public partial class TriggerViewModel : ObservableObject
     {
         TriggerAlarm = _stuckRules.Count == 0
             ? string.Empty
-            : $"握手卡住：{string.Join("、", _stuckRules)} —— 等 PLC 清信号，未强行复位";
+            : $"握手未完成：{string.Join("、", _stuckRules)} —— 等待 PLC 清除信号，未强制复位";
     }
 
     partial void OnTriggerPollIntervalMsChanged(int value)
@@ -176,7 +176,7 @@ public partial class TriggerViewModel : ObservableObject
         _shell.SaveConfigNow();
         await _shell.RestartTriggerWatchAsync();
 
-        TriggerStatus = $"已新增规则「{rule.Name}」：把信号/应答地址改成现场实际地址（0 基协议地址）";
+        TriggerStatus = $"已新增规则「{rule.Name}」：请将信号/应答地址修改为现场实际地址（0 基协议地址）";
     }
 
     [RelayCommand]
@@ -186,7 +186,7 @@ public partial class TriggerViewModel : ObservableObject
         var targets = selectedRows?.OfType<TriggerRule>().ToList() ?? [];
         if (targets.Count == 0)
         {
-            TriggerStatus = "没有选中规则";
+            TriggerStatus = "未选中任何规则";
             return;
         }
 

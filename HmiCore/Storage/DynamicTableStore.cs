@@ -90,7 +90,10 @@ public sealed class DynamicTableStore
         if (mode == StorageMode.Long)
         {
             columns.Add("[RegisterAddress] INT NOT NULL");
-            columns.Add("[RawValue] SMALLINT NOT NULL");
+            // FLOAT（= float(53)，8 字节）：32 位浮点、64 位浮点的原始值都装得下，
+            // 16 位量存进去就是整数本身。老库里的长表如果还是 SMALLINT，需要
+            // ALTER TABLE <表> ALTER COLUMN [RawValue] FLOAT NOT NULL;
+            columns.Add("[RawValue] FLOAT NOT NULL");
             columns.Add("[EngineeringValue] FLOAT NOT NULL");
         }
         else

@@ -12,6 +12,7 @@ public static class StorageGroupValidator
     /// <summary>
     /// 校验组表：组名唯一非空、表名合法、一张表只归一个组、宽表别超列数上限、区段不重叠。
     /// 顺手把组名与表名两端的空格去掉（就地修改传入的组），后面就不用到处 Trim。
+    /// 点位相关只验"算数的点位"（重叠时被盖住的不算数据，见 <see cref="TagLayout"/>）。
     /// </summary>
     public static void Validate(IReadOnlyList<StorageGroup> groups, IReadOnlyList<PlcTag> tags)
     {
@@ -19,6 +20,8 @@ public static class StorageGroupValidator
         {
             throw new InvalidOperationException("至少要有一个存储组。");
         }
+
+        var effective = TagLayout.EffectiveTags(tags);
 
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var tableOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -60,7 +63,7 @@ public static class StorageGroupValidator
 
             tableOwners[group.TableName] = group.Name;
 
-            int tagCount = CountTagsIn(group, tags);
+            int tagCount = CountTagsIn(group, effective);
             int maxPoints = DynamicTableStore.MaxPointColumns(group.Shape);
             if (group.Mode == StorageMode.Wide && tagCount > maxPoints)
             {
@@ -91,9 +94,37 @@ public static class StorageGroupValidator
                 }
             }
         }
+
+        ValidateTagSpans(groups, effective);
     }
 
-    /// <summary>落在某个区段内的点位数（区段是唯一判定依据）</summary>
+    /// <summary>
+    /// 点位占用校验：一个点位可能占好几个寄存器（32/64 位类型），所以它必须整段落在同一个区段里 ——
+    /// 只落一半的话区段读回来的是残缺值。传进来的已经是"算数的点位"，
+    /// 同一个寄存器只归一个点位（这事由 <see cref="TagLayout"/> 定，不在这里报错）。
+    /// 没归组的点位不参与采集与落库，不参与校验。
+    /// </summary>
+    private static void ValidateTagSpans(IReadOnlyList<StorageGroup> groups, IReadOnlyList<PlcTag> tags)
+    {
+        foreach (var tag in tags)
+        {
+            var group = groups.FirstOrDefault(g => g.Covers(tag.Address));
+            if (group is null)
+            {
+                continue;
+            }
+
+            if (!group.CoversRange(tag.Address, tag.EndAddress))
+            {
+                throw new InvalidOperationException(
+                    $"点位「{tag.Name}」（{tag.DisplayAddress}）是{PlcValueCodec.Display(tag.DataType)}，" +
+                    $"占 {tag.RegisterCount} 个寄存器，跨出了组「{group.Name}」的区段（{group.DisplayRange}）。" +
+                    "把区段调大，或把类型改回 16 位。");
+            }
+        }
+    }
+
+    /// <summary>落在某个区段内的点位数（区段是唯一判定依据；多寄存器点位要整段在区段里）</summary>
     private static int CountTagsIn(StorageGroup group, IReadOnlyList<PlcTag> tags) =>
-        tags.Count(t => group.Covers(t.Address));
+        tags.Count(t => group.CoversRange(t.Address, t.EndAddress));
 }

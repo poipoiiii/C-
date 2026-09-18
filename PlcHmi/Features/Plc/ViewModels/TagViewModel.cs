@@ -82,7 +82,8 @@ public partial class TagViewModel : ObservableObject
     /// <summary>把一次采集结果刷到界面上（必须在 UI 线程调用）</summary>
     public void Apply(Sample sample)
     {
-        RawText = sample.RawValue.ToString();
+        // 原始值可能是整数（16 位量）也可能是浮点（32/64 位量解出来的），统一按需显示小数
+        RawText = sample.RawValue.ToString("0.###");
         // 数值和单位分开：单位由界面按小字跟在后面，读起来更清楚
         ValueText = sample.EngineeringValue.ToString("0.##");
         UpdatedAtText = sample.Timestamp.ToString("HH:mm:ss");

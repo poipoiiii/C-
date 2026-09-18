@@ -52,4 +52,33 @@ public class PlcTagTests
 
         Assert.Equal("未归组", tag.GroupText);
     }
+
+    [Fact]
+    public void 三十二位点位_占两个寄存器_地址显示成一段()
+    {
+        var tag = new PlcTag(0, "温度", "℃", 1, 0, "温度", PlcDataType.Float32);
+
+        Assert.Equal(2, tag.RegisterCount);
+        Assert.Equal(1, tag.EndAddress);
+        Assert.Equal("40001~40002", tag.DisplayAddress);
+    }
+
+    [Fact]
+    public void 六十四位点位_占四个寄存器()
+    {
+        var tag = new PlcTag(10, "累计", "", 1, 0, "累计", PlcDataType.Float64);
+
+        Assert.Equal(4, tag.RegisterCount);
+        Assert.Equal(13, tag.EndAddress);
+        Assert.Equal("40011~40014", tag.DisplayAddress);
+    }
+
+    [Fact]
+    public void 老配置没有类型字段_默认按16位有符号()
+    {
+        var tag = new PlcTag(0, "温度", "℃", 0.1, 0);
+
+        Assert.Equal(PlcDataType.Int16, tag.DataType);
+        Assert.Equal(0, tag.EndAddress);
+    }
 }

@@ -43,15 +43,24 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="{x:Type controls:SectionHeader}">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <Rectangle Width="3" Height="16" RadiusX="1.5" RadiusY="1.5"
+                            <!-- 用 Grid 而不是横向 StackPanel：灰提示放在 * 列里，
+                                 宽度不够时用省略号收掉。StackPanel 会给子元素无限宽，
+                                 提示一长就把整行撑宽，压到右边的按钮甚至隔壁卡片上 -->
+                            <Grid VerticalAlignment="Center">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Rectangle Grid.Column="0" Width="3" Height="16" RadiusX="1.5" RadiusY="1.5"
                                            VerticalAlignment="Center" Margin="0,0,8,0"
                                            Fill="{Binding Accent, RelativeSource={RelativeSource TemplatedParent}}" />
-                                <TextBlock x:Name="TitleText" Style="{StaticResource SectionTitle}"
+                                <TextBlock x:Name="TitleText" Grid.Column="1" Style="{StaticResource SectionTitle}"
                                            Text="{Binding Title, RelativeSource={RelativeSource TemplatedParent}}" />
-                                <TextBlock x:Name="HintText" Style="{StaticResource SectionHint}"
+                                <TextBlock x:Name="HintText" Grid.Column="2" Style="{StaticResource SectionHint}"
+                                           TextTrimming="CharacterEllipsis"
                                            Text="{Binding Hint, RelativeSource={RelativeSource TemplatedParent}}" />
-                            </StackPanel>
+                            </Grid>
                             <ControlTemplate.Triggers>
                                 <!-- 没有说明文字就整段收起，免得留一段空白 -->
                                 <Trigger Property="Hint" Value="">

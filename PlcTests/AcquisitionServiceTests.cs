@@ -36,8 +36,48 @@ public class AcquisitionServiceTests
         Sample sample = PlcAcquisitionService.ToSample(tag, 500, timestamp);
 
         Assert.Same(tag, sample.Tag);
-        Assert.Equal((short)500, sample.RawValue);
+        Assert.Equal(500d, sample.RawValue);
         Assert.Equal(timestamp, sample.Timestamp);
+    }
+
+    [Fact]
+    public async Task 多寄存器点位_跨分段边界时不被拆开读()
+    {
+        // 区段长 201，超过 Modbus 单次读上限 125：32 位浮点落在 124~125，
+        // 正好压在"0~124 + 125~200"这条天真的切法上 —— 切下去就会两次读各拿一半，高低位配错。
+        var modbus = new ScriptedModbusClient();
+        for (ushort address = 0; address <= 200; address++)
+        {
+            modbus.Set(address, address);
+        }
+
+        modbus.Set(124, 0x3F80).Set(125, 0x0000);      // 1.0f，高字在前
+
+        var floatTag = new PlcTag(124, "温度", "℃", 1, 0, "温度", PlcDataType.Float32);
+        var tags = new[] { NewTag(0), floatTag };
+
+        var batch = await ReadOnce(modbus, tags, new ReadRange(0, 201));
+
+        Assert.Empty(batch.Failures);
+        Assert.Equal(1.0, batch.Samples.Single(s => s.Tag == floatTag).RawValue, 6);
+        Assert.Equal(2, modbus.BatchReadCalls);        // 0~123 与 124~200：为了不切开点位多让出 1 个寄存器
+    }
+
+    [Fact]
+    public async Task 多寄存器点位_整段读失败时按点位整段重读()
+    {
+        var modbus = new ScriptedModbusClient();
+        modbus.Set(0, 0x3F80).Set(1, 0x0000);   // 1.0f，高字在前
+        modbus.FailBatchReadCovering(3);        // 区段 0~3 里混了个不存在的地址，整段读必然失败
+
+        var floatTag = new PlcTag(0, "温度", "℃", 1, 0, "温度", PlcDataType.Float32);
+
+        var batch = await ReadOnce(modbus, [floatTag], new ReadRange(0, 4));
+
+        Assert.Empty(batch.Failures);
+        Assert.Equal(1.0, Assert.Single(batch.Samples).RawValue, 6);
+        Assert.Equal(0, modbus.SingleReadCalls);   // 多寄存器点位按整段重读，不是拆成单点拼
+        Assert.Equal(2, modbus.LastReadCount);     // 最近一次读的就是它占的那两个寄存器
     }
 
     [Fact]
@@ -121,11 +161,13 @@ public class AcquisitionServiceTests
     /// <summary>
     /// 可脚本化的假客户端：批量读可整体失败（模拟段内地址非法），单点读可按地址单独失败；
     /// 记下两类调用的次数，用来断言"批量读成功时不会退化成逐点读"。
+    /// 寄存器值按 ushort 存 —— 32 位浮点要靠两个寄存器的位拼出来，存成 short 就丢了高位。
     /// </summary>
     private sealed class ScriptedModbusClient : IModbusClient
     {
-        private readonly Dictionary<ushort, short> _values = [];
+        private readonly Dictionary<ushort, ushort> _values = [];
         private readonly HashSet<ushort> _failingAddresses = [];
+        private readonly HashSet<ushort> _badBatchAddresses = [];
 
         public bool BatchReadFails { get; init; }
 
@@ -133,7 +175,10 @@ public class AcquisitionServiceTests
 
         public int SingleReadCalls { get; private set; }
 
-        public ScriptedModbusClient Set(ushort address, short value)
+        /// <summary>最近一次批量读请求了几个寄存器（用来确认多寄存器点位是整段读回来的）</summary>
+        public int LastReadCount { get; private set; }
+
+        public ScriptedModbusClient Set(ushort address, ushort value)
         {
             _values[address] = value;
             return this;
@@ -142,6 +187,13 @@ public class AcquisitionServiceTests
         public ScriptedModbusClient FailSingleRead(ushort address)
         {
             _failingAddresses.Add(address);
+            return this;
+        }
+
+        /// <summary>请求区间覆盖到该地址的批量读整段失败（模拟段内混了不存在的地址），逐点读不受影响</summary>
+        public ScriptedModbusClient FailBatchReadCovering(ushort address)
+        {
+            _badBatchAddresses.Add(address);
             return this;
         }
 
@@ -157,12 +209,13 @@ public class AcquisitionServiceTests
                 throw new SlaveException("模拟：该地址逐点读也失败");
             }
 
-            return _values.TryGetValue(address, out var value) ? value : (short)0;
+            return unchecked((short)(_values.TryGetValue(address, out var value) ? value : (ushort)0));
         }
 
         public ushort[] ReadRegisters(ushort address, ushort count)
         {
             BatchReadCalls++;
+            LastReadCount = count;
             if (BatchReadFails)
             {
                 throw new SlaveException("模拟：整段读失败（段内有非法地址）");
@@ -171,7 +224,12 @@ public class AcquisitionServiceTests
             var values = new ushort[count];
             for (int i = 0; i < count; i++)
             {
-                values[i] = _values.TryGetValue((ushort)(address + i), out var value) ? (ushort)value : (ushort)0;
+                if (_badBatchAddresses.Contains((ushort)(address + i)))
+                {
+                    throw new SlaveException("模拟：整段读失败（段内有非法地址）");
+                }
+
+                values[i] = _values.TryGetValue((ushort)(address + i), out var value) ? value : (ushort)0;
             }
 
             return values;

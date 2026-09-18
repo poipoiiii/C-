@@ -44,14 +44,19 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
+                <!-- 标题一行、按钮一行：窄窗口下 WrapPanel 自动换行，不会溢出去压隔壁卡片 -->
                 <Grid Grid.Row="0" Margin="0,0,0,12">
-                    <controls:SectionHeader Title="扫描结果"
-                                            Hint="地址可填 40001 这种人读地址；" />
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <controls:SectionHeader Grid.Row="0" Title="扫描结果"
+                                            Hint="地址可填 40001 这类人读地址；32/64 位量需先勾选加入点位表，再在右侧合并（扫描仅识别 16 位寄存器，无法判断哪两个寄存器构成一个浮点）" />
+                    <WrapPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
                         <Button Content="全选可读" Command="{Binding SelectAllReadableCommand}" Width="88" />
                         <Button Content="加入点位表" Command="{Binding AddSelectedScanResultsCommand}"
                                 Style="{StaticResource ButtonSuccess}" Width="100" Margin="8,0,0,0" />
-                    </StackPanel>
+                    </WrapPanel>
                 </Grid>
                 <DataGrid Grid.Row="1" ItemsSource="{Binding ScanResults}" Style="{StaticResource FlatGrid}">
                     <DataGrid.Columns>
@@ -105,26 +110,116 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
+                <!-- 同样标题一行、按钮一行：提示长 + 三个按钮，挤一行会溢到左边那张卡片上 -->
                 <Grid Grid.Row="0" Margin="0,0,0,12">
-                    <controls:SectionHeader Title="采集点位表"
-                                            Hint="双击可编辑；宽表列名默认跟随名称自动同步，单独改过之后就不再跟着变"
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <controls:SectionHeader Grid.Row="0" Title="采集点位表"
+                                            Hint="双击可编辑；选中相邻几行可【合并为点位】（类型定宽度、字序定顺序）；同一个寄存器只算一个点位，被压住的那些不采集、表里也不出列"
                                             Accent="{DynamicResource App.Success}" />
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Content="删除选中" Width="88"
+                    <WrapPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <ComboBox Width="130" hc:InfoElement.Title="合并为" hc:InfoElement.TitlePlacement="Left"
+                                  ItemsSource="{Binding MergeDataTypeOptions}" DisplayMemberPath="Display"
+                                  SelectedValuePath="Value" SelectedValue="{Binding MergeDataType}" />
+                        <ComboBox Width="160" Margin="8,0,0,0" hc:InfoElement.Title="字序"
+                                  hc:InfoElement.TitlePlacement="Left"
+                                  ItemsSource="{Binding WordOrderOptions}" DisplayMemberPath="Display"
+                                  SelectedValuePath="Value" SelectedValue="{Binding MergeWordOrder}" />
+                        <Button Content="合并为点位" Width="100" Margin="8,0,0,0"
+                                Command="{Binding MergeSelectedTagsCommand}"
+                                CommandParameter="{Binding SelectedItems, ElementName=TagGrid}" />
+                        <Button Content="拆开多寄存器" Width="110" Margin="8,0,0,0"
+                                Command="{Binding SplitSelectedTagsCommand}"
+                                CommandParameter="{Binding SelectedItems, ElementName=TagGrid}" />
+                        <Button Content="删除选中" Width="88" Margin="8,0,0,0"
                                 Command="{Binding RemoveSelectedTagCommand}"
                                 CommandParameter="{Binding SelectedItems, ElementName=TagGrid}" />
                         <Button Content="保存配置" Command="{Binding SaveConfigCommand}" Width="88"
                                 Margin="8,0,0,0" />
-                    </StackPanel>
+                    </WrapPanel>
                 </Grid>
                 <DataGrid x:Name="TagGrid" Grid.Row="1" ItemsSource="{Binding TagConfigs}"
                           Style="{StaticResource FlatGrid}">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="人读地址" Width="130" IsReadOnly="True"
+                        <DataGridTextColumn Header="人读地址" Width="150" IsReadOnly="True"
                                             Binding="{Binding DisplayAddress}"
                                             ElementStyle="{StaticResource CellMono}" />
+                        <!-- 寄存器被别的点位占了就当场标红：改宽点位（16→32 位）最容易压住后面的点位 -->
+                        <DataGridTemplateColumn Header="占用" Width="130" IsReadOnly="True">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding OverlapText}" VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource CellText}">
+                                                <Setter Property="Foreground" Value="{DynamicResource App.Danger}" />
+                                                <Setter Property="Visibility" Value="Visible" />
+                                                <Style.Triggers>
+                                                    <!-- 不冲突时这一格空着，不占视觉 -->
+                                                    <DataTrigger Binding="{Binding HasOverlap}" Value="False">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
                         <DataGridTextColumn Header="协议地址" Width="110" Binding="{Binding Address}"
                                             ElementStyle="{StaticResource CellNumber}" />
+                        <!-- 类型 / 字序用常驻下拉框（列设只读，单击即可改），改完点位占几个寄存器立刻跟着变；
+                             被别的点位压住时禁用，免得继续把冲突改大 -->
+                        <DataGridTemplateColumn Header="类型" Width="150" IsReadOnly="True">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <ComboBox ItemsSource="{Binding DataContext.DataTypeOptions,
+                                                  RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                              DisplayMemberPath="Display" SelectedValuePath="Value"
+                                              IsEnabled="{Binding CanEditType}"
+                                              SelectedValue="{Binding DataType, UpdateSourceTrigger=PropertyChanged}" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <!-- 字序只对占多个寄存器的量有意义：16 位量只有一个寄存器，没有先后可言 -->
+                        <DataGridTemplateColumn Header="字序" Width="170" IsReadOnly="True">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Grid>
+                                        <TextBlock Text="—" VerticalAlignment="Center" HorizontalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource CellText}">
+                                                    <Setter Property="Foreground"
+                                                            Value="{DynamicResource App.Text.Secondary}" />
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsMultiRegister}" Value="False">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <ComboBox ItemsSource="{Binding DataContext.WordOrderOptions,
+                                                      RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                  DisplayMemberPath="Display" SelectedValuePath="Value"
+                                                  IsEnabled="{Binding CanEditType}"
+                                                  SelectedValue="{Binding WordOrder, UpdateSourceTrigger=PropertyChanged}">
+                                            <ComboBox.Style>
+                                                <Style TargetType="ComboBox">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsMultiRegister}" Value="False">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ComboBox.Style>
+                                        </ComboBox>
+                                    </Grid>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
                         <DataGridTextColumn Header="名称" Width="140" Binding="{Binding Name}"
                                             ElementStyle="{StaticResource CellText}" />
                         <DataGridTextColumn Header="单位" Width="90" Binding="{Binding Unit}"
@@ -135,7 +230,7 @@
                                             ElementStyle="{StaticResource CellNumber}" />
                         <DataGridTextColumn Header="宽表列名" Width="*" Binding="{Binding ColumnName}"
                                             ElementStyle="{StaticResource CellText}" />
-                        <!-- 存储组：由地址落在哪个区段决定，这里只展示；要改就改「存储映射」页的区段 -->
+                        <!-- 存储组：由点位占的整段落在哪个区段决定，这里只展示；要改就改「存储映射」页的区段 -->
                         <DataGridTextColumn Header="存储组" Width="120" IsReadOnly="True"
                                             Binding="{Binding GroupText}"
                                             ElementStyle="{StaticResource CellText}" />

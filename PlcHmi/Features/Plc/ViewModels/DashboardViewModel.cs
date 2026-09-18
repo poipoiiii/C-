@@ -63,16 +63,18 @@ public partial class DashboardViewModel : ObservableObject
 
     /// <summary>
     /// 某个点位落到哪张表：按地址找生效配置里覆盖它的存储组，与落库用的是同一套判定。
-    /// 返回 null 表示这个地址不在任何区段内 —— 既没采集也没落库，自然没有记录历史。
+    /// 返回 null 表示这个点位不在任何区段内 —— 既没采集也没落库，自然没有记录历史。
     /// </summary>
     public StorageGroup? ResolveStorageGroup(PlcTag tag) =>
-        _shell.Config.Groups.FirstOrDefault(g => g.Covers(tag.Address));
+        _shell.Config.Groups.FirstOrDefault(g => g.CoversRange(tag.Address, tag.EndAddress));
 
     /// <summary>按当前点位表重建卡片（增删点位、切换机型后调用）</summary>
     public void Rebuild()
     {
         Tags.Clear();
-        var tags = _shell.Config.Tags;
+
+        // 一张卡片一个数据：被多寄存器点位盖住的那些点位不算数据（它们只是大数的半截寄存器），不出卡片
+        var tags = TagLayout.EffectiveTags(_shell.Config.Tags);
         for (int i = 0; i < tags.Count; i++)
         {
             Tags.Add(new TagViewModel(tags[i], Palette[i % Palette.Length]));
@@ -143,7 +145,7 @@ public partial class DashboardViewModel : ObservableObject
         var target = _shell.Storage.SelectedGroup ?? _shell.Storage.Groups.FirstOrDefault();
         if (target is null)
         {
-            RecordsInfo = "还没有存储组";
+            RecordsInfo = "暂无存储组";
             return;
         }
 

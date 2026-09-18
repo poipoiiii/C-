@@ -82,6 +82,7 @@ public partial class StorageViewModel : ObservableObject
     /// <summary>
     /// 重新推导每个点位归到哪个组：地址落在哪个区段就归哪个组。
     /// 区段是唯一判定依据，所以不存在「点位指向一个不存在的组」这种事。
+    /// 顺带把「压住同一个寄存器」的点位标出来（见 <see cref="RefreshTagOverlaps"/>）。
     /// </summary>
     public void RefreshTagGroups()
     {
@@ -95,8 +96,10 @@ public partial class StorageViewModel : ObservableObject
         {
             foreach (var tag in _shell.Config.Tags)
             {
-                tag.Group = ResolveGroupName(tag.Address);
+                tag.Group = ResolveGroupName(tag);
             }
+
+            RefreshTagOverlaps();
         }
         finally
         {
@@ -108,12 +111,15 @@ public partial class StorageViewModel : ObservableObject
         _shell.Dashboard?.RefreshGrouping();
     }
 
-    /// <summary>地址落在哪个区段；不在任何区段内返回空 —— 这种点位既不会采集也不会落库</summary>
-    private string ResolveGroupName(ushort address)
+    /// <summary>
+    /// 点位落在哪个区段；不在任何区段内返回空 —— 这种点位既不会采集也不会落库。
+    /// 多寄存器点位要整段都在区段里才算归组（只落一半的话采回来是残缺值）。
+    /// </summary>
+    private string ResolveGroupName(PlcTag tag)
     {
         foreach (var group in Groups)
         {
-            if (group.Covers(address))
+            if (group.CoversRange(tag.Address, tag.EndAddress))
             {
                 return group.Name;
             }
@@ -122,9 +128,47 @@ public partial class StorageViewModel : ObservableObject
         return string.Empty;
     }
 
-    /// <summary>落在某个区段内的点位（区段是唯一的判定依据，不看点位上的归组缓存）</summary>
+    /// <summary>
+    /// 落在某个区段内、且真正算数的点位：建表、宽表补列、点位计数都用这一份 ——
+    /// 被别的点位盖住的那些（多寄存器量里的半截寄存器）不单独出列（见 <see cref="TagLayout"/>）。
+    /// </summary>
     private List<PlcTag> TagsOfGroup(StorageGroup group) =>
-        [.. _shell.Config.Tags.Where(t => group.Covers(t.Address))];
+        [.. TagLayout.EffectiveTags(_shell.Config.Tags).Where(t => group.CoversRange(t.Address, t.EndAddress))];
+
+    /// <summary>落在某个区段内、但被别的点位盖住的点位（预览里点名，免得"少了一列"却不知道原因）</summary>
+    private List<PlcTag> CoveredTagsOfGroup(StorageGroup group) =>
+        [.. TagLayout.Resolve(_shell.Config.Tags)
+            .Where(p => p.CoveredBy is not null && group.CoversRange(p.Tag.Address, p.Tag.EndAddress))
+            .Select(p => p.Tag)];
+
+    /// <summary>
+    /// 标出"压住同一个寄存器"的点位：把某个点位改宽（16 位 → 32 位）就会盖住后面的点位。
+    /// 盖住别人的那个只提示、不锁（得留一条改回来的路）；**被盖住的那个锁住类型**，
+    /// 而且它的寄存器已经算在那个大数据里了 —— 不参与采集、落库与建表。
+    /// </summary>
+    private void RefreshTagOverlaps()
+    {
+        var placements = TagLayout.Resolve(_shell.Config.Tags);
+
+        // 盖住别人的那一方也点个名，才知道自己刚吞掉了什么
+        var covered = placements
+            .Where(p => p.CoveredBy is not null)
+            .GroupBy(p => p.CoveredBy!)
+            .ToDictionary(g => g.Key, g => string.Join("、", g.Select(p => p.Tag.Name)));
+
+        foreach (var (tag, coveredBy) in placements)
+        {
+            if (coveredBy is not null)
+            {
+                tag.OverlapText = $"被「{coveredBy.Name}」占用";
+                tag.CanEditType = false;
+                continue;
+            }
+
+            tag.OverlapText = covered.TryGetValue(tag, out var names) ? $"压住了「{names}」" : string.Empty;
+            tag.CanEditType = true;
+        }
+    }
 
     // ---------------- 组表编辑与校验 ----------------
 
@@ -171,7 +215,7 @@ public partial class StorageViewModel : ObservableObject
         int start = Groups.Count == 0 ? 0 : Groups.Max(g => g.EndAddress) + 1;
         Groups.Add(new StorageGroup($"组{index}", $"PlcData{index}", StorageMode.Wide, (ushort)start, 20));
         SelectedGroup = Groups[^1];
-        StorageStatus = $"已新增组「组{index}」，区段 {Groups[^1].DisplayRange}：接着设目标表，并把区段改成本台设备实际的地址段";
+        StorageStatus = $"已新增组「组{index}」，区段 {Groups[^1].DisplayRange}：请设置目标表，并将区段修改为本台设备实际的地址段";
     }
 
     [RelayCommand]
@@ -179,13 +223,13 @@ public partial class StorageViewModel : ObservableObject
     {
         if (SelectedGroup is null)
         {
-            StorageStatus = "先选中要删除的组";
+            StorageStatus = "请先选中要删除的组";
             return;
         }
 
         if (Groups.Count <= 1)
         {
-            StorageStatus = "至少要保留一个存储组";
+            StorageStatus = "至少需保留一个存储组";
             return;
         }
 
@@ -195,7 +239,7 @@ public partial class StorageViewModel : ObservableObject
         SelectedGroup = Groups[0];
 
         StorageStatus = affected > 0
-            ? $"已删除组「{removedName}」：原区段内的 {affected} 个点位现在显示为「未归组」，改成别的组的区段覆盖它们即可"
+            ? $"已删除组「{removedName}」：原区段内的 {affected} 个点位现显示为「未归组」，将其纳入其他组的区段即可"
             : $"已删除组「{removedName}」";
     }
 
@@ -227,7 +271,7 @@ public partial class StorageViewModel : ObservableObject
     private void UpdateEffectiveStorageText()
     {
         EffectiveStorageText = _shell.Config.Groups.Count == 0
-            ? "当前没有存储组"
+            ? "暂无存储组"
             : "当前写入：" + string.Join("　|　", _shell.Config.Groups.Select(g =>
                 $"{g.Name} {g.DisplayRange} → {g.TableName}（{(g.Mode == StorageMode.Wide ? "宽表" : "长表")}）"));
     }
@@ -254,7 +298,11 @@ public partial class StorageViewModel : ObservableObject
         return extras.Count == 0 ? "不含附加列" : "含 " + string.Join(" + ", extras);
     }
 
-    /// <summary>建表语句预览：每个组一段，段首标出组名与点位数量</summary>
+    /// <summary>
+    /// 建表语句预览：每个组一段，段首标出组名与点位数量。
+    /// 列只按"算数的点位"出 —— 被多寄存器点位盖住的那些不单独出列，
+    /// 但要在段首点名，免得人以为少了列。
+    /// </summary>
     public void UpdateScriptPreview()
     {
         try
@@ -263,12 +311,18 @@ public partial class StorageViewModel : ObservableObject
             foreach (var group in Groups)
             {
                 var tags = TagsOfGroup(group);
+                var covered = CoveredTagsOfGroup(group);
+
+                string note = covered.Count == 0
+                    ? ""
+                    : $"；已并入大点位的 {string.Join("、", covered.Select(t => t.Name))} 不出列";
+
                 blocks.Add($"-- 组「{group.Name}」→ 表 {group.TableName}" +
-                           $"（{tags.Count} 个点位 · {DescribeShape(group)}）\r\n" +
+                           $"（{tags.Count} 个点位 · {DescribeShape(group)}{note}）\r\n" +
                            DynamicTableStore.BuildCreateScript(group.TableName, group.Mode, tags, group.Shape));
             }
 
-            CreateScriptPreview = blocks.Count > 0 ? string.Join("\r\n\r\n", blocks) : "（还没有存储组）";
+            CreateScriptPreview = blocks.Count > 0 ? string.Join("\r\n\r\n", blocks) : "（暂无存储组）";
         }
         catch (Exception ex)
         {
@@ -350,7 +404,7 @@ public partial class StorageViewModel : ObservableObject
 
         if (sync.BlockingNotNull.Count > 0)
         {
-            note.Append($"；⚠ 表里这些非空列没人写，插入会失败，建议换新表名或把它们改成可空 / 删掉：" +
+            note.Append($"；⚠ 这些非空列无数据写入，插入将失败，建议更换表名或将其改为可空 / 删除：" +
                         string.Join("、", sync.BlockingNotNull));
         }
 

@@ -85,7 +85,10 @@ public partial class StorageGroup : ObservableObject
     }
 
     /// <summary>这个地址是否落在本组区段内</summary>
-    public bool Covers(ushort address) => Count > 0 && address >= StartAddress && address <= EndAddress;
+    public bool Covers(ushort address) => CoversRange(address, address);
+
+    /// <summary>整个区间 [start, end] 是否都落在本组区段内（多寄存器点位要整段都在段里才采得到）</summary>
+    public bool CoversRange(int start, int end) => Count > 0 && start >= StartAddress && end <= EndAddress;
 
     /// <summary>深拷贝：界面上的组表是草稿，提交时才覆盖生效配置</summary>
     public StorageGroup Clone() =>

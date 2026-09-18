@@ -148,4 +148,50 @@ public class StorageGroupValidatorTests
 
         StorageGroupValidator.Validate([group], []);
     }
+
+    [Fact]
+    public void 多寄存器点位跨出区段_拦下()
+    {
+        // 区段 0~4（5 个寄存器），32 位浮点放在 4：只占到了区段里的 1 个寄存器
+        var floatTag = new PlcTag(4, "温度", "℃", 1, 0, "温度", PlcDataType.Float32);
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => StorageGroupValidator.Validate([Group(count: 5)], [floatTag]));
+        Assert.Contains("跨出", ex.Message);
+    }
+
+    [Fact]
+    public void 多寄存器点位整段在区段内_通过()
+    {
+        var floatTag = new PlcTag(3, "温度", "℃", 1, 0, "温度", PlcDataType.Float32);
+
+        StorageGroupValidator.Validate([Group(count: 5)], [floatTag]);
+    }
+
+    [Fact]
+    public void 六十四位点位要四个寄存器都在区段里_通过()
+    {
+        var doubleTag = new PlcTag(1, "累计", "", 1, 0, "累计", PlcDataType.Float64);
+
+        StorageGroupValidator.Validate([Group(count: 5)], [doubleTag]);
+    }
+
+    [Fact]
+    public void 两个点位压住同一个寄存器_不算错_被盖住的不算数据()
+    {
+        // 32 位浮点占 0~1，16 位点位又挂在 1 上：1 已经是那个浮点的一部分，
+        // 建表只出一列（这事由 TagLayout 定），不能因此把人拦在建表外面
+        var floatTag = new PlcTag(0, "温度", "℃", 1, 0, "温度", PlcDataType.Float32);
+
+        StorageGroupValidator.Validate([Group()], [floatTag, Tag(1)]);
+    }
+
+    [Fact]
+    public void 未归组的多寄存器点位_不参与校验()
+    {
+        // 落在所有区段之外的点位既不采集也不落库，不该因为占得长就被拦下
+        var floatTag = new PlcTag(100, "温度", "℃", 1, 0, "温度", PlcDataType.Float32);
+
+        StorageGroupValidator.Validate([Group()], [floatTag]);
+    }
 }

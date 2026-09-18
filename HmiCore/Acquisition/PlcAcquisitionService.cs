@@ -19,13 +19,9 @@ public sealed class PlcAcquisitionService : IDisposable     /// 明确禁止继�
     private const int MaxRegistersPerRead = 125;
 
     private readonly IModbusClient _modbus;
-    private readonly IReadOnlyList<PlcTag> _tags;       // _代表只能类内部访问
 
-    /// <summary>要读的区段（一个存储组一段），顺序固定，构造时快照</summary>
-    private readonly IReadOnlyList<ReadRange> _ranges;
-
-    /// <summary>地址 → 该地址上的点位：区段里没有点位的地址读回来直接丢掉</summary>
-    private readonly Dictionary<ushort, List<PlcTag>> _tagsByAddress;
+    /// <summary>要读的区段（一个存储组一段）+ 段内点位，顺序固定，构造时快照</summary>
+    private readonly IReadOnlyList<(ReadRange Range, IReadOnlyList<PlcTag> Tags)> _plan;
 
     private CancellationTokenSource? _cts;
     private Task? _loop;
@@ -33,12 +29,14 @@ public sealed class PlcAcquisitionService : IDisposable     /// 明确禁止继�
     public PlcAcquisitionService(IModbusClient modbus, IReadOnlyList<PlcTag> tags, IReadOnlyList<ReadRange> ranges)
     {
         _modbus = modbus;
-        _tags = tags;
-        _ranges = ranges;
-        _tagsByAddress = tags
-            .GroupBy(t => t.Address)
-            .ToDictionary(g => g.Key, g => g.ToList());
+        _plan = [.. ranges.Select(range => (range, InRange(range, tags)))];
     }
+
+    /// <summary>段内点位：整个点位（可能占好几个寄存器）都要落在区段里，按起始地址排序</summary>
+    private static IReadOnlyList<PlcTag> InRange(ReadRange range, IReadOnlyList<PlcTag> tags) =>
+        [.. tags
+            .Where(t => t.Address >= range.Start && t.EndAddress <= range.Start + range.Count - 1)
+            .OrderBy(t => t.Address)];
 
     /// <summary>采集周期（毫秒），运行中修改即时生效</summary>
     public int IntervalMs { get; set; } = 3000;
@@ -141,30 +139,54 @@ public sealed class PlcAcquisitionService : IDisposable     /// 明确禁止继�
 
     /// <summary>
     /// 按存储组的区段读：一个区段就是一组数据（一张表），从起始地址起连续读 Count 个寄存器，
-    /// 段内没点位的地址读回来直接丢掉。现场就是一个区段读一次，这里额外按 Modbus 的单次读上限
-    /// （125 个）拆开，所以区段上千个寄存器也是一轮轮询内读完，不会退化成逐点读。
-    /// 区段里有不存在的地址会导致整段失败（异常码 02），那时回退到段内点位逐点读，
-    /// 好点位照常入库；传输层错误直接抛出，由外层按整轮故障处理。
+    /// 段内没点位的地址读回来直接丢掉。现场就是一个区段读一次。
     /// </summary>
     private AcquisitionBatch ReadAll()
     {
-        var samples = new List<Sample>(_tags.Count);
+        var samples = new List<Sample>();
         var failures = new List<TagFailure>();
 
-        foreach (var range in _ranges)
+        foreach (var (range, tags) in _plan)
         {
-            for (int offset = 0; offset < range.Count; offset += MaxRegistersPerRead)
-            {
-                var count = (ushort)Math.Min(MaxRegistersPerRead, range.Count - offset);
-                ReadChunk((ushort)(range.Start + offset), count, samples, failures);
-            }
+            ReadInChunks(range, tags, samples, failures);
         }
 
         return new AcquisitionBatch(samples, failures);
     }
 
-    /// <summary>读一段连续寄存器，把落在段内的点位换算成样本；整段失败时回退到段内逐点读</summary>
-    private void ReadChunk(ushort start, ushort count, List<Sample> samples, List<TagFailure> failures)
+    /// <summary>
+    /// 把区段切成不超过 Modbus 单次读上限（125 个）的小块，**且块边界不落在多寄存器点位中间**：
+    /// 32 位量占两个寄存器，边界切在中间会让两次读各拿一半，拼出来的值一定是错的。
+    /// </summary>
+    private void ReadInChunks(ReadRange range, IReadOnlyList<PlcTag> tags,
+        List<Sample> samples, List<TagFailure> failures)
+    {
+        int rangeEnd = range.Start + range.Count - 1;
+
+        for (int chunkStart = range.Start; chunkStart <= rangeEnd;)
+        {
+            int chunkEnd = Math.Min(chunkStart + MaxRegistersPerRead - 1, rangeEnd);
+
+            // 缩到"不切开任何点位"的位置。点位互不重叠（建表前校验过），所以至多缩一次；
+            // 写成循环是为了不依赖这个前提。点位最长 4 个寄存器，绝不会缩到起点之前。
+            foreach (var tag in tags)
+            {
+                if (tag.Address <= chunkEnd && tag.EndAddress > chunkEnd)
+                {
+                    chunkEnd = tag.Address - 1;
+                }
+            }
+
+            var chunkTags = tags.Where(t => t.Address >= chunkStart && t.EndAddress <= chunkEnd).ToList();
+            ReadChunk((ushort)chunkStart, (ushort)(chunkEnd - chunkStart + 1), chunkTags, samples, failures);
+
+            chunkStart = chunkEnd + 1;
+        }
+    }
+
+    /// <summary>读一段连续寄存器，把段内的点位解码成样本；整段失败时回退到段内逐个点位读</summary>
+    private void ReadChunk(ushort start, ushort count, IReadOnlyList<PlcTag> tags,
+        List<Sample> samples, List<TagFailure> failures)
     {
         try
         {
@@ -172,46 +194,39 @@ public sealed class PlcAcquisitionService : IDisposable     /// 明确禁止继�
 
             // 同一段共用一个时间戳：批量读本来就是在同一时刻取回的
             var timestamp = DateTime.Now;
-            for (int i = 0; i < count; i++)
+            foreach (var tag in tags)
             {
-                if (!_tagsByAddress.TryGetValue((ushort)(start + i), out var tagsAtAddress))
-                {
-                    continue;
-                }
-
-                foreach (var tag in tagsAtAddress)
-                {
-                    samples.Add(ToSample(tag, (short)values[i], timestamp));
-                }
+                samples.Add(ToSample(tag, DecodeFrom(values, (int)(tag.Address - start), tag), timestamp));
             }
         }
         catch (SlaveException)
         {
-            for (int i = 0; i < count; i++)
+            foreach (var tag in tags)
             {
-                if (!_tagsByAddress.TryGetValue((ushort)(start + i), out var tagsAtAddress))
+                try
                 {
-                    continue;
+                    samples.Add(ToSample(tag, ReadOne(tag), DateTime.Now));
                 }
-
-                foreach (var tag in tagsAtAddress)
+                catch (SlaveException ex)
                 {
-                    try
-                    {
-                        short raw = _modbus.ReadRegister(tag.Address);
-                        samples.Add(ToSample(tag, raw, DateTime.Now));
-                    }
-                    catch (SlaveException ex)
-                    {
-                        failures.Add(new TagFailure(tag, DescribeSlaveException(ex)));
-                    }
+                    failures.Add(new TagFailure(tag, DescribeSlaveException(ex)));
                 }
             }
         }
     }
 
+    /// <summary>从整段缓冲里按点位的数据类型与字序解码（offset 是点位起始地址在缓冲里的位置）</summary>
+    private static double DecodeFrom(ushort[] values, int offset, PlcTag tag) =>
+        PlcValueCodec.Decode(values.AsSpan(offset, tag.RegisterCount), tag.DataType, tag.WordOrder);
+
+    /// <summary>回退路径：单独读一个点位（16 位量走单点读，多寄存器量一次读回它占的整段）</summary>
+    private double ReadOne(PlcTag tag) => tag.RegisterCount == 1
+        ? _modbus.ReadRegister(tag.Address)
+        : PlcValueCodec.Decode(_modbus.ReadRegisters(tag.Address, (ushort)tag.RegisterCount),
+            tag.DataType, tag.WordOrder);
+
     /// <summary>原始值 → 工程值：项目唯一的业务公式，独立出来便于单测</summary>
-    internal static Sample ToSample(PlcTag tag, short raw, DateTime timestamp)
+    internal static Sample ToSample(PlcTag tag, double raw, DateTime timestamp)
         => new(tag, raw, raw * tag.Scale + tag.Offset, timestamp);
 
     /// <summary>把 NModbus 那一大段英文异常压成一句话，界面上才看得清</summary>

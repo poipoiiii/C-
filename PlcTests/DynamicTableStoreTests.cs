@@ -68,7 +68,7 @@ public class DynamicTableStoreTests
         Assert.Contains("CREATE TABLE [表A]", script);
         Assert.Contains("[Timestamp] DATETIME2 NOT NULL", script);
         Assert.Contains("[RegisterAddress] INT NOT NULL", script);
-        Assert.Contains("[RawValue] SMALLINT NOT NULL", script);
+        Assert.Contains("[RawValue] FLOAT NOT NULL", script);
         Assert.Contains("[EngineeringValue] FLOAT NOT NULL", script);
         Assert.Contains("[Id] INT IDENTITY(1,1) NOT NULL PRIMARY KEY", script);
     }

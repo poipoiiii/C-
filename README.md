@@ -19,9 +19,11 @@
 | 保持寄存器 | 最常用的一种寄存器，16 位，对应 C# 的 `ushort` / `short` |
 | 40001 地址 | 人读地址，从 1 开始数；**协议地址从 0 开始**，所以 40001 = 协议地址 0 |
 | 原始值 / 工程值 | 寄存器里是 500 这样的整数，实际意思是 50.0 ℃：`工程值 = 原始值 × Scale + Offset` |
+| 32 / 64 位量 | 浮点、长整型在 PLC 里**横跨连续几个 16 位寄存器**（32 位占 2 个、64 位占 4 个），所以一个点位不一定只占一个寄存器 |
+| 字序（ABCD / CDAB） | 那几个寄存器谁先谁后，各厂家放法不同；选错了数值就是乱的（同一段字节，换个顺序读出来是另一个数） |
 | 异常码 02 | 从站回「这个地址我没有」，扫描功能就是靠它区分地址是否存在 |
 
-**换算规则是这个项目唯一的业务逻辑**，其余都是工程化的脚手架。
+**两条业务逻辑**：换算规则（`工程值 = 原始值 × Scale + Offset`）和**解码规则**（几个寄存器按类型与字序拼成一个数，见 [PlcValueCodec.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Models/PlcValueCodec.cs)），其余都是工程化的脚手架。
 
 ---
 
@@ -31,8 +33,8 @@
 ┌───────────────────────────┐   读保持寄存器（Modbus TCP）   ┌──────────────────────────┐
 │ PlcSimulator（仿真 PLC）   │  ◄───────────────────────     │ PlcHmi（WPF 上位机）       │
 │ 127.0.0.1:5020            │                                │ 采集循环 / 看板 / 点位配置  │
-│ 同一端口挂多个从站：        │  ────────────────────────►     │ 曲线 / 卡片 / 动态表        │
-│  1#挤出机 2#注塑机 3#公用   │   返回 ushort[] 或异常码 02     └─────────────┬────────────┘
+│ 同一端口挂 6 个从站：       │  ────────────────────────►     │ 曲线 / 卡片 / 动态表        │
+│ 1~5=五种机台 6=握手测试     │   返回 ushort[] 或异常码 02     └─────────────┬────────────┘
 └───────────────────────────┘                                              │ ADO.NET 动态 SQL
                                                                            ▼
                                                              ┌──────────────────────────┐
@@ -46,7 +48,7 @@
 | 项目 | 类型 | 作用 |
 |---|---|---|
 | [HmiCore](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/HmiCore.csproj) | 类库 | 上位机地基：通信 / 采集 / 存储 / 配置四组服务 + 领域模型（[IModbusClient](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Comm/IModbusClient.cs)、[DynamicTableStore](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Storage/DynamicTableStore.cs)），不含任何 WPF 类型 |
-| [PlcSimulator](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/Program.cs) | 控制台 | 假 PLC：一个端口挂 3 个从站，没真设备也能跑通全链路，还能验证扫描功能 |
+| [PlcSimulator](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/Program.cs) | 控制台 | 假 PLC：一个端口挂 6 个从站（1~5 = 五种机台，各开放 40001~40100；6 = 握手测试），没真设备也能跑通全链路，还能验证扫描与触发 |
 | [PlcHmi](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Views/MainWindow.xaml) | WPF 桌面 | 完整上位机：连接 / 扫描点位 / 实时曲线 / 动态建表落库 |
 | [PlcTests](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcTests/PlcTests.csproj) | 测试 | xunit：动态表拼 SQL 的白名单校验、机型名校验、点位模型联动、换算公式 |
 
@@ -125,9 +127,9 @@ c_Test/
 │       ├── Sample.cs / AcquisitionBatch.cs  # 一轮采集结果（成功样本 + 失败点位）
 │       ├── TriggerRule.cs            # 触发规则：信号/应答地址 + 超时
 │       └── ScanResult.cs             # 扫描结果一行
-├── PlcSimulator/                     # 仿真 PLC（从站）
-│   ├── Program.cs                    # 起监听、挂多个从站、每秒刷新数据
-│   ├── DeviceProfile.cs              # 设备档案：从站号/名称/开放多少寄存器/刷新规则
+├── PlcSimulator/                     # 仿真 PLC（6 个从站：1~5=五种机台，6=握手测试）
+│   ├── Program.cs                    # 起监听、挂多个从站、每秒刷新机台数据
+│   ├── DeviceProfile.cs              # 机型档案：五种机台的列与量程 + 区段划分（每 5 个寄存器一张表）
 │   ├── HandshakeDevice.cs            # 模拟现场握手设备（信号位 → 应答位时序）
 │   └── LimitedSlaveDataStore.cs      # 只开放指定地址，越界回异常码 02
 ├── PlcHmi/                           # WPF 上位机（MVVM）：一层外壳 + 按功能分模块
@@ -182,7 +184,7 @@ c_Test/
 先把 `.env.example` 复制成 `.env` 并填好数据库连接，再按 [start.md](file:///d:/taoxi_download_for_use/no_use_do/c_Test/start.md) 分别启动：
 
 ```powershell
-# 终端 1：仿真 PLC（127.0.0.1:5020，从站 1/2/3）
+# 终端 1：仿真 PLC（127.0.0.1:5020，从站 1~5 = 五种机台、从站 6 = 握手测试）
 dotnet run --project PlcSimulator\PlcSimulator.csproj
 
 # 终端 2：上位机界面（默认已填 127.0.0.1:5020，点【连接】→【开始采集】）
@@ -195,7 +197,7 @@ dotnet run --project PlcHmi\PlcHmi.csproj
 dotnet test          # 根目录执行，走 c_Test.sln，跑 PlcTests
 ```
 
-**界面推荐操作顺序**：连接 → 「采集点位」页扫描 40001~40040 → 勾选可读地址加入点位表、改名称与 Scale → 「存储映射」页选目标表与长/宽表 → 点【建表 / 校验结构】→ 回看板点【开始采集】看曲线。
+**界面推荐操作顺序**：连接 → 「采集点位」页扫描 40001~40100（机台从站每 5 个寄存器一张表，共 20 张）→ 勾选可读地址加入点位表、改名称与 Scale → 「存储映射」页按区段选目标表与长/宽表 → 点【建表 / 校验结构】→ 回看板点【开始采集】看曲线。
 
 ---
 
@@ -225,10 +227,13 @@ dotnet test          # 根目录执行，走 c_Test.sln，跑 PlcTests
 
 ### 3. 仿真 PLC：怎么模拟「一个网关挂多台设备」
 
-- [DeviceProfile.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/DeviceProfile.cs)：一台设备的档案。`required` 属性表示「创建时必须赋值」；[Fill](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/DeviceProfile.cs#L20-L21) 是一个 `Action<double, ushort[]>` 委托，把「按秒数刷新寄存器」这条规则当成数据传给框架 —— 这是**把函数当参数**的典型用法。
-- [Program.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/Program.cs)：同一端口上 `AddSlave` 多个从站，各自数据互不相干；每秒刷新并打印。
+**从站号就是机台号的前 4 位机型**：从站 1~5 依次是 AIXP / AITN / AIBM / AIIR / AIPC，**一个从站只放一种机型的数据**（和上位机「机台号前 4 位决定机型」用的是同一套代号，台号不区分），各开放 40001~40100；从站 6 是握手测试设备。
+
+- **一个区段 = 一张表**：[MachineSpec](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/DeviceProfile.cs#L14-L82) 定义每种机型的 5 列（列名 + 原始值量程）；40001~40100 共 100 个寄存器，**每 5 个一个区段（一张表）**，共 20 张表 —— 段内第 j 个寄存器取第 j 列的量程（`寄存器序号 % 5`），20 个区段各自独立。现场点表确定后，只改 `MachineSpec.All` 里那几行的列与量程即可，其余逻辑不动。
+- [DeviceProfile.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/DeviceProfile.cs)：一台设备的档案。`required` 属性表示「创建时必须赋值」；[Fill](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/DeviceProfile.cs#L113-L114) 是一个 `Action<double, ushort[]>` 委托，把「刷新寄存器」这条规则当成数据传给框架 —— 这是**把函数当参数**的典型用法；机台数据每秒按区段整体重新随机。
+- [Program.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/Program.cs)：同一端口上 `AddSlave` 多个从站，各自数据互不相干；每秒刷一行摘要（机台从站只打首尾两个区段，100 个寄存器全打会把控制台刷满）。
 - [LimitedSlaveDataStore.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/LimitedSlaveDataStore.cs#L40-L46)：越界读写抛 `InvalidModbusRequestException(IllegalDataAddress)`，即回异常码 02。**这样仿真器和真实 PLC 行为一致**——不是所有地址都存在，扫描功能才有得验证。
-- [Ctrl+C 处理](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/Program.cs#L55-L60)：不直接杀进程，而是 `cts.Cancel()` 让循环正常收尾，这是 .NET 推荐的任务取消方式。
+- [Ctrl+C 处理](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcSimulator/Program.cs#L82-L88)：不直接杀进程，而是 `cts.Cancel()` 让循环正常收尾，这是 .NET 推荐的任务取消方式。
 
 ### 4. 界面结构：一层外壳 + 四个页签
 
@@ -237,7 +242,7 @@ dotnet test          # 根目录执行，走 c_Test.sln，跑 PlcTests
 | 页签 | 内容控件 | 干什么 |
 |---|---|---|
 | 实时看板 | [DashboardView](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/Views/DashboardView.xaml) | 每点位一张卡片（大数字 + 原始值 + 60 点滚动曲线），按存储组分段、每段可折叠；点卡片里的曲线弹出「表记录历史」窗 |
-| 采集点位 | [ScanView](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/Views/ScanView.xaml) | 扫描寄存器 → 勾选加入点位表 → 编辑名称/单位/Scale/Offset/宽表列名 |
+| 采集点位 | [ScanView](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/Views/ScanView.xaml) | 扫描寄存器 → 勾选【加入点位表】→ 在点位表里**选中相邻几行点【合并为点位】**（32/64 位量占多个寄存器；扫描侧只看得见 16 位寄存器，认不出哪两个是一个浮点，所以类型/字序在点位表这侧定）→ 编辑名称/类型/字序/单位/Scale/Offset/宽表列名；选错了用【拆开多寄存器】改回来。**字序只对 32/64 位点位显示**；**同一个寄存器只算一个点位**：重叠时按"起始地址靠前、占得更宽"的那个算（见 [TagLayout.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Models/TagLayout.cs)），被压住的那些在「占用」列标红、类型被锁住，而且**不采集、表里也不出列** —— 一个数据一列 |
 | 存储映射 | [StorageView](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/Views/StorageView.xaml) | 选目标表与长表/宽表 → 预览建表语句 → 建表/校验结构；组表与建表预览之间的分隔条可上下拖动调高 |
 | 触发记录 | [TriggerView](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/Views/TriggerView.xaml) | 触发规则（信号/应答地址、超时）→ 监听状态与报警条 → 最近的触发记录 |
 
@@ -250,6 +255,7 @@ dotnet test          # 根目录执行，走 c_Test.sln，跑 PlcTests
 - **最近记录表列不固定**：长表/宽表列不同，所以「表记录历史」窗里 `AutoGenerateColumns="True"` 直接绑一个 `DataView`（[RecordHistoryWindow.xaml](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Views/Dialogs/RecordHistoryWindow.xaml#L27-L29)）。
 - **看板按存储组分段**：`DashboardViewModel.RefreshGrouping` 把卡片按 `PlcTag.Group` 归到 `DashboardGroupViewModel` 里，界面一个 `Expander` 一段；只重排卡片不重建，所以改地址、调区段不会清空曲线。
 - **点曲线看记录历史**：卡片曲线挂的是 [PreviewMouseLeftButtonUp](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/Views/DashboardView.xaml.cs#L42-L66)（Preview 不会被图表自己的鼠标处理吃掉），按地址反查覆盖它的存储组 → 目标表，再用非模态小窗展示这张表最近的记录。
+- **标题行别用横向 `StackPanel` 装长提示**：`SectionHeader` 的模板原来是一个横向 `StackPanel`（竖条 + 标题 + 灰提示）。`StackPanel` 会给子元素**无限宽**去量，提示一长整行就被撑得比卡片还宽，直接压到隔壁卡片上。现在模板是 `Grid`（`Auto | Auto | *`），提示放在 `*` 列并开 `TextTrimming="CharacterEllipsis"`，宽度不够就出省略号。同理，标题旁边那排按钮改用 `WrapPanel` 并单独占一行，窄窗口下自动换行。
 
 ### 5. 动态表：DynamicTableStore（本项目最值得看的一段）
 
@@ -265,8 +271,8 @@ dotnet test          # 根目录执行，走 c_Test.sln，跑 PlcTests
 
 | 模式 | 结构 | 特点 |
 |---|---|---|
-| 长表 Long | 一行一个点位：时间/地址/原始值/工程值 | 点位增减不用改表结构，最通用（`DataRecords` 就是长表） |
-| 宽表 Wide | 一行一个时刻，每个点位一列 | 查起来直观、适合做报表；点位增减要同步列 |
+| 长表 Long | 一行一个点位：时间/地址/原始值/工程值（`RawValue` 是 FLOAT：16 位量存整数，32/64 位量存解码后的值） | 点位增减不用改表结构，最通用（`DataRecords` 就是长表）；**老库里 `RawValue` 是 SMALLINT 的，装不下浮点**，执行一句 `ALTER TABLE <表> ALTER COLUMN [RawValue] FLOAT NOT NULL;` 即可 |
+| 宽表 Wide | 一行一个时刻，每个点位一列（点位占几个寄存器都只算一列） | 查起来直观、适合做报表；点位增减要同步列 |
 
 宽表有个容易踩的坑，代码专门处理了（[EnsureWideColumnsAsync](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Storage/DynamicTableStore.cs#L136-L196)）：
 
@@ -294,8 +300,9 @@ dotnet test          # 根目录执行，走 c_Test.sln，跑 PlcTests
 
 | 设计 | 为什么 |
 |---|---|
-| [Start / StopAsync](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Acquisition/PlcAcquisitionService.cs#L49-L82) | `Task.Run` 把循环扔后台；停止时 `cts.Cancel()` 再 `await` 等它真结束，不乱杀线程 |
-| [ReadAll](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Acquisition/PlcAcquisitionService.cs#L129-L148) 逐点读、**只捕获 `SlaveException`** | 地址类错误（异常码 02）只记为该点位失败，继续读下一个；点位表与现场不匹配时，坏点位标灰自己，不拖垮整轮 |
+| [Start / StopAsync](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Acquisition/PlcAcquisitionService.cs#L64-L97) | `Task.Run` 把循环扔后台；停止时 `cts.Cancel()` 再 `await` 等它真结束，不乱杀线程 |
+| [ReadAll](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Acquisition/PlcAcquisitionService.cs#L144-L185) 按区段批量读、**只捕获 `SlaveException`** | 地址类错误（异常码 02）只记为该点位失败，继续读下一个；点位表与现场不匹配时，坏点位标灰自己，不拖垮整轮 |
+| **分段边界不切开点位**（[ReadInChunks](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Acquisition/PlcAcquisitionService.cs#L157-L185)） | 区段超过 Modbus 单次读上限（125 个）要拆成几次读。32 位量占两个寄存器，边界切在中间会让两次读各拿一半，拼出来的值一定是错的 —— 所以拆之前先收窄到"不切开任何点位"的位置 |
 | 传输层异常交给外层 | 断网/连接断开这种重试也没意义的，整轮作废并上报 |
 | [PersistAsync](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Acquisition/PlcAcquisitionService.cs#L32-L36) 由外部注入 | 采集服务不认识数据库，只拿到读成功的样本；写哪张表、长表还是宽表由界面决定 |
 | 先刷界面、后落库 | 数据库出问题也不能影响实时监控（[L84-L113](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Acquisition/PlcAcquisitionService.cs#L84-L113)） |
@@ -309,7 +316,7 @@ dotnet test          # 根目录执行，走 c_Test.sln，跑 PlcTests
 |---|---|
 | [MainViewModel](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/ViewModels/MainViewModel.cs)（外壳） | 机型配置、连接、采集生命周期、状态栏；把 `Config` / `Modbus` 借给页签 |
 | [DashboardViewModel](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/ViewModels/DashboardViewModel.cs) | 点位卡片与曲线、最近记录 |
-| [ScanViewModel](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/ViewModels/ScanViewModel.cs) | 寄存器扫描、点位表增删改 |
+| [ScanViewModel](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/ViewModels/ScanViewModel.cs) | 寄存器扫描、点位表增删改、**把相邻几个寄存器合并成一个多寄存器点位**（以及拆回去） |
 | [StorageViewModel](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/ViewModels/StorageViewModel.cs) | 存储组草稿、建表 / 校验结构、归组展示 |
 | [TriggerViewModel](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/ViewModels/TriggerViewModel.cs) | 触发规则、报警条、触发记录 |
 
@@ -333,6 +340,9 @@ dotnet test          # 根目录执行，走 c_Test.sln，跑 PlcTests
 ### 10. 配置与图形
 
 - [PlcTag.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Models/PlcTag.cs) 是普通 `class`（不再是 `record`），因为它在表格里可编辑、要序列化到 json。`OnNameChanged` 里做了「改名称时列名跟着变，但列名被单独改过就不动」的联动（[L31-L37](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Models/PlcTag.cs#L31-L37)）。
+- **一个点位可以占几个寄存器**：`PlcTag.DataType` 决定占 1 / 2 / 4 个（16 / 32 / 64 位），`WordOrder` 决定这几位谁先谁后；解码规则只在 [PlcValueCodec.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Models/PlcValueCodec.cs) 里实现一份。老配置文件没有这两个字段，反序列化后是 `Int16` + 高字在前，与老版本行为一致。
+  - 为什么不在存储组那层解决（配"这个区段的第 N 个起是浮点"）：那种写法把类型信息从点位上挪走了，点位名、单位、Scale 和类型分成两份真相，改一处忘一处就开始错。类型跟着点位走，采集、落库、校验都只有一套判定。
+  - 连带的三条硬约束（都在 [StorageGroupValidator](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Storage/StorageGroupValidator.cs) 里，建表/保存前必过）：① 多寄存器点位要**整段**落在同一个区段内；② 采集拆段时不能切开点位（见第 7 节）；③ 宽表列数按"算数的点位"算。**同一个寄存器只算一个点位**：重叠时按起始地址靠前、占得更宽的那个算（[TagLayout.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Models/TagLayout.cs)），被盖住的只标注不参与 —— 它是那个大数的半截字节，采集、落库、建表都跳过它。
 - [ConfigStore.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Config/ConfigStore.cs)：机型配置读写，一个实例对一个 `data/configs/<机型>.json`。json 读写 + `UnsafeRelaxedJsonEscaping`（中文直接写出来，配置文件要给人看）+ 配置损坏时退回默认点位保证界面能起；机型名过白名单正则（它要当文件名，顺带挡路径穿越）；配置里带 `ConfigVersion`，格式版本高于程序时按默认点位启动并在状态栏说明。启动选哪个机型见 [ResolveStartupProfile](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Config/ConfigStore.cs#L69-L82)：`--config` > 上次用的 > 已有第一个 > 默认。整套目录布局（统一在 `data/` 下：configs / logs / exports / updates）在 [AppPaths.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/HmiCore/Config/AppPaths.cs)。
 - [TagViewModel.cs](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/ViewModels/TagViewModel.cs)：滑动窗口曲线（[MaxPoints = 60](file:///d:/taoxi_download_for_use/no_use_do/c_Test/PlcHmi/Features/Plc/ViewModels/TagViewModel.cs#L16-L19)），每次 `Apply` 加点、删最旧；`MarkFailed` 只标灰自己并显示失败原因。
 
@@ -375,10 +385,14 @@ dotnet test          # 根目录执行，走 c_Test.sln，跑 PlcTests
 | 启动报「缺少环境变量 DB_SERVER」 | 根目录没有 `.env`，从 `.env.example` 复制并填值 |
 | 「连接失败」 | 仿真 PLC 没启动，或 IP/端口填错（仿真用 `127.0.0.1:5020`） |
 | 端口 502 监听失败 | 502 是常用端口，本机常被占用，仿真器已改用 5020 |
-| 探测不到从站 | 仿真器要从站 1/2/3；真实网关可能不响应短超时，可把 `ProbeTimeoutMs` 调大 |
-| 扫描结果大片「读异常：Modbus 异常码 2」 | 这些地址从站没开放（正是扫描要发现的事）；仿真器 1# 只开 0~19 |
+| 探测不到从站 | 仿真器有从站 1~6（1~5 = 五种机台、6 = 握手测试）；真实网关可能不响应短超时，可把 `ProbeTimeoutMs` 调大 |
+| 扫描结果大片「读异常：Modbus 异常码 2」 | 这些地址从站没开放（正是扫描要发现的事）；仿真器的机台从站只开 0~99（40001~40100） |
 | 卡片数字是 `--`、圆点灰 | 该点位读失败或未连接，卡片右下角会显示失败原因 |
+| 浮点/长整型的值明显不对（极大值、`NaN`、跳来跳去） | 类型或字序不对：把点位表里那行的「类型」改成实际宽度、「字序」换另一种（高字在前 / 低字在前 最常见）。同一段字节换个字序读出来就是另一个数 |
+| 建表提示「跨出了组…的区段」 | 多寄存器点位要整段在一个区段里：把区段调大，或把类型改回 16 位 |
+| 点位表里有行标红「被…占用」，建表却没它那一列 | 正常：那个寄存器已经被那个多寄存器点位占了（它只是大数的半截字节），采集、落库、建表都跳过它；建表预览段首会点名"已并入大点位的 X 不出列" |
 | 落库失败「不能将值 NULL 插入列」 | 目标表里有非空列没被写入，按【建表/校验结构】的 ⚠ 提示换表名或把列改可空 |
+| 长表落库报算术溢出/类型转换错 | 老长表的 `RawValue` 还是 SMALLINT，装不下浮点：`ALTER TABLE <表> ALTER COLUMN [RawValue] FLOAT NOT NULL;` |
 | 表名/列名报「不合法」 | 只能中英文/数字/下划线，且不能数字开头 |
 | 界面改了列名但预览没变 | 正常情况下会实时联动；若没变，确认改的是点位表那一行（双击编辑） |
 | 启动后点位表不是我预期那台机器 | 机型记的是上次用的那个；看状态栏左侧的「机型」提示，或启动时加 `--config <机型>` |

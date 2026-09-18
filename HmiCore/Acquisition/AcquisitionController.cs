@@ -65,7 +65,10 @@ public sealed class AcquisitionController : IDisposable
             return false;
         }
 
-        var service = new PlcAcquisitionService(modbus, [.. config.Tags], BuildReadRanges(config))
+        // 只采"算数的点位"：被多寄存器点位盖住的那些不再单独采（见 TagLayout）
+        var tags = TagLayout.EffectiveTags(config.Tags);
+
+        var service = new PlcAcquisitionService(modbus, tags, BuildReadRanges(config, tags))
         {
             IntervalMs = IntervalMs,
             PersistEnabled = PersistEnabled,
@@ -131,9 +134,9 @@ public sealed class AcquisitionController : IDisposable
     private void OnPersistFailed(string message) => PersistFailed?.Invoke(message);
 
     /// <summary>交给采集循环的读取区段：只取真有点位的组，空区段读回来也没地方写</summary>
-    private static IReadOnlyList<ReadRange> BuildReadRanges(PlcConfig config) =>
+    private static IReadOnlyList<ReadRange> BuildReadRanges(PlcConfig config, IReadOnlyList<PlcTag> tags) =>
         [.. config.Groups
-            .Where(g => g.Count > 0 && config.Tags.Any(t => g.Covers(t.Address)))
+            .Where(g => g.Count > 0 && tags.Any(t => g.CoversRange(t.Address, t.EndAddress)))
             .OrderBy(g => g.StartAddress)
             .Select(g => new ReadRange(g.StartAddress, g.Count))];
 
@@ -155,7 +158,7 @@ public sealed class AcquisitionController : IDisposable
                 continue;
             }
 
-            var samples = batch.Where(s => group.Covers(s.Tag.Address)).ToList();
+            var samples = batch.Where(s => group.CoversRange(s.Tag.Address, s.Tag.EndAddress)).ToList();
             if (samples.Count == 0)
             {
                 continue;
@@ -172,7 +175,7 @@ public sealed class AcquisitionController : IDisposable
         }
 
         // 正常情况下采集只会读区段内的点位，走不到这里；真出现说明区段在采集中被改过，提醒一句
-        int orphan = batch.Count(s => !config.Groups.Any(g => g.Covers(s.Tag.Address)));
+        int orphan = batch.Count(s => !config.Groups.Any(g => g.CoversRange(s.Tag.Address, s.Tag.EndAddress)));
         if (orphan > 0)
         {
             throw new InvalidOperationException(

@@ -76,7 +76,7 @@
                                             Accent="{DynamicResource App.Warning}" />
                     <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12"
                                Foreground="{DynamicResource App.Text.Secondary}"
-                               Text="只记「事件发生过」：时间戳 + 规则名 + 信号/应答地址。机台号、批次号、卷号这类业务字段由后续处理写入这张表即可。" />
+                               Text="仅记录事件发生：时间戳 + 规则名 + 信号/应答地址。机台号、批次号、卷号等业务字段由后续处理写入本表即可。" />
                 </StackPanel>
                 <DataGrid Grid.Row="1" ItemsSource="{Binding TriggerView}" AutoGenerateColumns="True"
                           IsReadOnly="True" Style="{StaticResource FlatGrid}"

@@ -56,6 +56,21 @@ public partial class ScanViewModel : ObservableObject
 
     [ObservableProperty] private string _tagStatus = "";
 
+    /// <summary>点位表「类型」下拉的选项</summary>
+    public IReadOnlyList<PlcDataTypeOption> DataTypeOptions { get; } = PlcValueCodec.DataTypeOptions;
+
+    /// <summary>点位表「字序」下拉的选项</summary>
+    public IReadOnlyList<WordOrderOption> WordOrderOptions { get; } = PlcValueCodec.WordOrderOptions;
+
+    /// <summary>合并下拉的选项：只列占多个寄存器的类型（合并成 16 位没有意义）</summary>
+    public IReadOnlyList<PlcDataTypeOption> MergeDataTypeOptions { get; } = PlcValueCodec.MultiRegisterTypeOptions;
+
+    /// <summary>合并成哪种类型 —— 现场多数量是 32 位浮点占两个寄存器，所以默认它</summary>
+    [ObservableProperty] private PlcDataType _mergeDataType = PlcDataType.Float32;
+
+    /// <summary>合并出来的点位用哪种字序，合并后还能单独改</summary>
+    [ObservableProperty] private WordOrder _mergeWordOrder = WordOrder.HighWordFirst;
+
     /// <summary>可编辑的采集点位表（直接就是配置对象里的集合）</summary>
     public ObservableCollection<PlcTag> TagConfigs => _shell.Config.Tags;
 
@@ -79,7 +94,7 @@ public partial class ScanViewModel : ObservableObject
 
         if (!TryParseAddress(ScanStart, out var start) || !TryParseAddress(ScanEnd, out var end))
         {
-            ScanStatus = "地址格式不对，示例：40001（人读地址）或 0（协议地址）";
+            ScanStatus = "地址格式无效，示例：40001（人读地址）或 0（协议地址）";
             return;
         }
 
@@ -141,21 +156,117 @@ public partial class ScanViewModel : ObservableObject
         var selected = ScanResults.Where(r => r.IsSelected && r.IsReadable).ToList();
         if (selected.Count == 0)
         {
-            TagStatus = "没有勾选可读的地址";
+            TagStatus = "未勾选任何可读地址";
             return;
         }
 
         var tagConfigs = TagConfigs;
         int added = 0;
-        foreach (var item in selected.Where(item => tagConfigs.All(t => t.Address != item.Address)))
+        foreach (var item in selected.Where(item => !IsRegisterUsed(tagConfigs, item.Address)))
         {
             tagConfigs.Add(new PlcTag(item.Address, $"点位{item.Address}", string.Empty, 1, 0, $"点位{item.Address}"));
             added++;
         }
 
         _shell.OnTagsChanged();
-        TagStatus = $"已加入 {added} 个点位，跳过重复 {selected.Count - added} 个。记得按需改名称与 Scale。";
+        TagStatus = $"已加入 {added} 个点位，跳过重复或已占用的 {selected.Count - added} 个。请按需修改名称与 Scale。";
     }
+
+    /// <summary>
+    /// 把点位表里选中的相邻几行合并成一个多寄存器点位（现场多数量是 32 位浮点占两个寄存器）。
+    /// 类型与字序只能在这一侧定：扫描结果只看得见一个个 16 位寄存器，
+    /// 哪两个合起来是一个浮点，只有人知道 —— 所以合并放在点位表上，不在扫描结果上。
+    /// 合并 = 把第一行改成选定的宽度、删掉后面的行；名称/单位/换算沿用第一行。
+    /// </summary>
+    [RelayCommand]
+    private void MergeSelectedTags(IList? selectedRows)
+    {
+        int count = PlcValueCodec.RegisterCount(MergeDataType);
+
+        var targets = selectedRows?.OfType<PlcTag>().OrderBy(t => t.Address).ToList() ?? [];
+        if (targets.Count != count)
+        {
+            TagStatus = $"{PlcValueCodec.Display(MergeDataType)}占用 {count} 个寄存器：" +
+                $"请在点位表中选择 {count} 行相邻点位（当前已选 {targets.Count} 行）";
+            return;
+        }
+
+        for (int i = 1; i < targets.Count; i++)
+        {
+            if (targets[i].Address != targets[i - 1].Address + 1)
+            {
+                TagStatus = "选中的点位地址不连续：合并后的点位从起始地址起连续占用";
+                return;
+            }
+        }
+
+        var first = targets[0];
+        int endAddress = first.Address + count - 1;
+        var tagConfigs = TagConfigs;
+
+        // 合并后的区间不能压住别人（选中的这几行自己当然可以）
+        var occupant = tagConfigs.FirstOrDefault(t =>
+            !targets.Contains(t) && t.Address <= endAddress && first.Address <= t.EndAddress);
+        if (occupant is not null)
+        {
+            TagStatus = $"合并后会与点位「{occupant.Name}」（{occupant.DisplayAddress}）地址重叠，请先删除该点位或将其改窄";
+            return;
+        }
+
+        var merged = new PlcTag(first.Address, first.Name, first.Unit, first.Scale, first.Offset,
+            first.ColumnName, MergeDataType, MergeWordOrder);
+
+        int index = tagConfigs.IndexOf(first);
+        foreach (var tag in targets)
+        {
+            tagConfigs.Remove(tag);
+        }
+
+        tagConfigs.Insert(Math.Min(index, tagConfigs.Count), merged);
+
+        _shell.OnTagsChanged();
+        TagStatus = $"已将 {targets.Count} 个点位合并为「{merged.Name}」" +
+            $"（{PlcValueCodec.Display(MergeDataType)}，{PlcValueCodec.Display(MergeWordOrder)}，占用 {merged.DisplayAddress}）";
+    }
+
+    /// <summary>把多寄存器点位再拆回一个个 16 位点位（合并选错了能改回来）</summary>
+    [RelayCommand]
+    private void SplitSelectedTags(IList? selectedRows)
+    {
+        var targets = selectedRows?.OfType<PlcTag>().Where(t => t.RegisterCount > 1).ToList() ?? [];
+        if (targets.Count == 0)
+        {
+            TagStatus = "请先选中至少一个 32/64 位点位（仅占多个寄存器的点位需要拆开）";
+            return;
+        }
+
+        var tagConfigs = TagConfigs;
+        foreach (var tag in targets)
+        {
+            int index = tagConfigs.IndexOf(tag);
+            if (index < 0)
+            {
+                continue;
+            }
+
+            tagConfigs.RemoveAt(index);
+
+            // 拆出来的寄存器按 16 位有符号看（类型待定），Scale/Offset 是原来那个合成量的，不带过去
+            for (int i = 0; i < tag.RegisterCount; i++)
+            {
+                string name = $"{tag.Name}-{i + 1}";
+                tagConfigs.Insert(index + i,
+                    new PlcTag((ushort)(tag.Address + i), name, tag.Unit, 1, 0, name));
+            }
+        }
+
+        _shell.OnTagsChanged();
+        TagStatus = $"已拆开 {targets.Count} 个点位；拆出的寄存器按 16 位有符号读取，请核对类型与换算";
+    }
+
+    /// <summary>这个寄存器地址是不是已经被某个点位占着（多寄存器点位要把整段都算上）</summary>
+    private static bool IsRegisterUsed(IEnumerable<PlcTag> tags, ushort address) =>
+        tags.Any(t => t.Address <= address && address <= t.EndAddress);
 
     [RelayCommand]
     private void SelectAllReadable()
@@ -174,7 +285,7 @@ public partial class ScanViewModel : ObservableObject
         var targets = selectedRows?.OfType<PlcTag>().ToList() ?? [];
         if (targets.Count == 0)
         {
-            TagStatus = "没有选中点位";
+            TagStatus = "未选中任何点位";
             return;
         }
 

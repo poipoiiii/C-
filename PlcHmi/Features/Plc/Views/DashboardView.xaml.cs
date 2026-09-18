@@ -54,8 +54,8 @@ public partial class DashboardView : UserControl
         if (group is null)
         {
             MessageBox.Show(Window.GetWindow(this),
-                $"点位「{tag.Tag.Name}」（{tag.Tag.DisplayAddress}）不在任何存储组的区段内，不会落库，也就没有记录历史。\n" +
-                "到「存储映射」页把区段覆盖到这个地址即可。",
+                $"点位「{tag.Tag.Name}」（{tag.Tag.DisplayAddress}）不在任何存储组的区段内，不会落库，因此没有记录历史。\n" +
+                "请到「存储映射」页将区段覆盖到该地址。",
                 "查看记录历史", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
